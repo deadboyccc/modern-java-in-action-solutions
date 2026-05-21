@@ -1,0 +1,24 @@
+docker-compose exec -T postgres psql -U postgres -d tapas -c "
+drop table if exists factbook;
+create table factbook (
+    year    int,
+    date    date,
+    shares  text,
+    trades  text,
+    dollars text
+);
+"
+
+# Stream the local file directly into the container using \copy from pstdin
+docker-compose exec -T postgres psql -U postgres -d tapas -c "\copy factbook from pstdin with delimiter E'\t' null ''" < factbook.csv
+
+# Execute the final migration block
+docker-compose exec -T postgres psql -U postgres -d tapas -c "
+begin;
+alter table factbook
+    alter shares type bigint using replace(shares, ',', '')::bigint,
+    alter trades type bigint using replace(trades, ',', '')::bigint,
+    alter dollars type numeric using substring(replace(dollars, ',', '') from 2)::numeric;
+commit;
+select * from factbook;
+"
