@@ -35,3 +35,4 @@ where
   and date < '2017-02-01'::date + interval '1 month'
 
 order by date asc;
+drop table if exists factbook;
