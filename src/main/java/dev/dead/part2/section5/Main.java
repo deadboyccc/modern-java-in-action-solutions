@@ -9,6 +9,7 @@ import static java.util.Comparator.comparing;
 
 public class Main {
     static void main() {
+
         Trader raoul = new Trader("Raoul", "Cambridge");
         Trader mario = new Trader("Mario", "Milan");
         Trader alan = new Trader("Alan", "Cambridge");
