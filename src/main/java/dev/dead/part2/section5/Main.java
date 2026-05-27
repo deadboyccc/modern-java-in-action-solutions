@@ -1,9 +1,12 @@
 package dev.dead.part2.section5;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -113,7 +116,15 @@ public class Main {
                 .limit(5)
                 .forEach(System.out::println);
         List<Integer> listOfTens = Stream.generate(() -> 10).limit(10).toList();
+        System.out.println("_".repeat(10));
+        Path path = Path.of(Main.class.getResource("/hamlet.txt").getPath());
+        try (Stream<String> lines = Files.lines(path)) {
+            lines.flatMap(line -> Stream.of(line.split(" ")))
+                    .forEach(IO::print);
 
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
 }
