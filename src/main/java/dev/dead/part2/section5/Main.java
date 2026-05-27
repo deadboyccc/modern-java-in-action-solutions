@@ -1,5 +1,9 @@
 package dev.dead.part2.section5;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -81,6 +85,35 @@ public class Main {
                         .mapToObj(b -> new Triple<>(a, b, Math.sqrt(a * a + b * b)))
                         .filter(triple -> triple.third() % 1 == 0)
                 );
+        // building streams of nullables
+        var values =
+                Stream.of("config", "home", "user")
+                        .flatMap(key -> Stream.ofNullable(System.getProperty(key)));
+
+
+        // 1. Get the stream
+        InputStream is = Main.class.getResourceAsStream("/hamlet.txt");
+
+        // 2. The cleanest modern pipe to get a Stream<String>
+        assert is != null;
+        try (Stream<String> lines = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8)).lines()) {
+            long uniqueWords = lines
+                    .flatMap(line -> Stream.of(line.split(" ")))
+                    .distinct().count();
+            System.out.println("UniqueWords: " + uniqueWords);
+        }
+        // generate fib pairs with iterate
+        // 0, 1, 1, 2, 3,
+        var firstPair = new Pair<>(0, 1);
+        Stream.iterate(firstPair, prevPair -> new Pair<Integer, Integer>(prevPair.second(), prevPair.first() + prevPair.second()))
+                .limit(10)
+                .forEach(IO::println);
+        // tinkering with generate
+        Stream.generate(Math::random)
+                .limit(5)
+                .forEach(System.out::println);
+        List<Integer> listOfTens = Stream.generate(() -> 10).limit(10).toList();
+
     }
 
 }
