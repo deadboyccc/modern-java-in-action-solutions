@@ -14,6 +14,7 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import static java.util.Comparator.comparing;
+import static java.util.stream.Collectors.*;
 
 public class Main {
     static void main() {
@@ -125,6 +126,63 @@ public class Main {
         } catch (IOException e) {
             e.printStackTrace();
         }
+        // grouping transactions by trader
+        var transactionsGroupedByCurrency = transactions.stream()
+                .collect(groupingBy(Transaction::getTrader));
+
+        // count transactions using collectors
+        var countOfTransactions = transactions.stream()
+                .collect(counting());
+
+        // finding min and max transaction by collectors
+        var maxTransByCollector = transactions.stream()
+                .collect(maxBy(comparing(Transaction::getValue)));
+
+        var minTransByCollector = transactions.stream()
+                .collect(minBy(comparing(Transaction::getValue)));
+
+        // summingInt, averageInt , summarizingInt
+        var summaryInt = transactions.stream()
+                .collect(summarizingInt(Transaction::getValue));
+
+        // joiningBy traders' names
+        var simpleJoining = transactions.stream()
+                .map(transaction -> transaction.getTrader().getName())
+                .collect(joining(","));
+        var joiningByNames = transactions.stream()
+                .collect(mapping(transaction -> transaction.getTrader().getName(), Collectors.joining(" ,")));
+
+        // total value using collectors
+        var totalValueCollectors = transactions.stream()
+                .collect(reducing(0, Transaction::getValue, Integer::sum));
+
+        // max by using reducing
+        var maxValueTrans = transactions.stream()
+                .collect(reducing((t1, t2) -> t1.getValue() > t2.getValue() ? t1 : t2));
+
+
+        // nested collectors
+        var nestedCollectors = transactions.stream()
+                // it's implicit to list
+                .collect(groupingBy(Transaction::getTrader,
+                        // the land of parentheses
+                        filtering(transaction -> transaction.getValue() > 200, toList())));
+
+        // var nested collectors : groupingBy then mapping the values
+        var nestedCollectorsMapping = transactions.stream()
+                .collect(groupingBy(Transaction::getTrader,
+                        mapping(Transaction::getYear
+                                , toSet())));
+
+
+        // var flatMapping
+
+        var nestedFlatMapping = transactions.stream()
+                // stream per trader -> each stream is mapped to a stream of (year,value)-> flattened, then collected to list as value to keys
+                .collect(groupingBy(Transaction::getTrader,
+                        flatMapping(t -> Stream.of(t.getYear(), t.getValue()), toList())));
+
+
     }
 
 }
