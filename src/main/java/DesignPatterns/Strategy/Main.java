@@ -1,4 +1,4 @@
-package DesignPatterns;
+package DesignPatterns.Strategy;
 
 import java.util.stream.IntStream;
 

@@ -1,4 +1,4 @@
-package DesignPatterns;
+package DesignPatterns.Strategy;
 
 abstract public class Player {
     private String name;

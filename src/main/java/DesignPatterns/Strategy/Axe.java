@@ -1,4 +1,4 @@
-package DesignPatterns;
+package DesignPatterns.Strategy;
 
 public class Axe implements WeaponBehavior {
 
