@@ -8,13 +8,25 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Optional;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import static java.util.Comparator.comparing;
 import static java.util.stream.Collectors.*;
+
+enum TransactionSize {
+    SMALL, MEDIUM, LARGE;
+
+    // Helper method to determine size based on value
+    public static TransactionSize fromValue(int value) {
+        if (value > 1000) return LARGE;
+        if (value < 100) return SMALL;
+        return MEDIUM;
+    }
+}
 
 public class Main {
     static void main() {
@@ -37,7 +49,7 @@ public class Main {
         // 4. Returns a string of all traders’ names sorted alphabetically
         var allTradersNamesSortedAlphabetically = transactions.stream().map(transaction -> transaction.getTrader().getName()).distinct().sorted(comparing(String::toLowerCase)).reduce("", (curr, acc) -> acc + curr);
         // -- more efficient using joining()
-        var joiningString = transactions.stream().map(transaction -> transaction.getTrader().getName()).distinct().sorted(comparing(String::toLowerCase)).collect(Collectors.joining(", ")); // internally uses StringBuilder
+        var joiningString = transactions.stream().map(transaction -> transaction.getTrader().getName()).distinct().sorted(comparing(String::toLowerCase)).collect(joining(", ")); // internally uses StringBuilder
 
         // 5. Are any traders based in Milan?
         var anyMilan = transactions.stream().map(transaction -> transaction.getTrader().getName()).anyMatch(name -> name.equals("Milan"));
@@ -59,7 +71,7 @@ public class Main {
                 // each one is a string[] -> stream<string[]>
                 .map(s -> s.split(""))
                 // each String[] -> stream<String> -> Stream<Stream<String>>> -> flattened
-                .flatMap(Arrays::stream).distinct().collect(Collectors.joining());
+                .flatMap(Arrays::stream).distinct().collect(joining());
         String[] arrayOfWords = {"Goodbye", "World"}; // list<String> -> Stream<String>
         // turn the string array to stream of strings
         Stream<String> streamOfWords = Arrays.stream(arrayOfWords);
@@ -150,7 +162,7 @@ public class Main {
                 .map(transaction -> transaction.getTrader().getName())
                 .collect(joining(","));
         var joiningByNames = transactions.stream()
-                .collect(mapping(transaction -> transaction.getTrader().getName(), Collectors.joining(" ,")));
+                .collect(mapping(transaction -> transaction.getTrader().getName(), joining(" ,")));
 
         // total value using collectors
         var totalValueCollectors = transactions.stream()
@@ -182,6 +194,50 @@ public class Main {
                 .collect(groupingBy(Transaction::getTrader,
                         flatMapping(t -> Stream.of(t.getYear(), t.getValue()), toList())));
 
+
+        // multilevel grouping by
+        var groupedByTradersByTransactionSize = transactions.stream()
+                .collect(groupingBy(Transaction::getTrader,
+                        groupingBy(tx -> TransactionSize.fromValue(tx.getValue()))
+                ));
+
+        // process each substream after grouping by
+        var maxTransPerTrader = transactions.stream()
+                .collect(groupingBy(Transaction::getTrader,
+                        maxBy(comparing(Transaction::getValue))));
+
+        var transCountPerTrade = transactions.stream()
+                .collect(groupingBy(Transaction::getTrader,
+                        counting()));
+
+        // collect and then transform Collector
+        var maxTransNoOptionalsPerTrade = transactions.stream()
+                .collect(groupingBy(
+                        Transaction::getTrader,
+                        collectingAndThen(
+                                maxBy(Comparator.comparingInt(Transaction::getValue)),
+                                Optional::get
+                        )
+                ));
+
+        var statisticsSummaryPerTrader = transactions.stream()
+                .collect(groupingBy(Transaction::getTrader,
+                        summarizingInt(Transaction::getValue)));
+        // per trader get if they have small, med, or large
+        var traderTier = transactions.stream()
+                .collect(groupingBy(
+                        Transaction::getTrader,
+                        mapping(
+                                transaction -> TransactionSize.fromValue(transaction.getValue()),
+                                toSet()
+                        )
+                ));
+        var partitionByLargeTrader = transactions.stream()
+                .collect(partitioningBy(
+                        transaction ->
+                                traderTier.get(transaction.getTrader())
+                                        .contains(TransactionSize.LARGE)
+                ));
 
     }
 
