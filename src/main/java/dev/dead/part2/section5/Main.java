@@ -7,10 +7,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -30,7 +27,16 @@ enum TransactionSize {
 
 public class Main {
     static void main() {
+//        extracted();
+        var partitionNums = partitionPrimes(25);
+        System.out.print("Primes: ");
+        partitionNums.get(true).forEach(n -> System.out.print(n + " "));
+        System.out.print("\nNon-Primes: ");
+        partitionNums.get(false).forEach(n -> System.out.print(n + " "));
+    }
 
+
+    private static void extracted() {
         Trader raoul = new Trader("Raoul", "Cambridge");
         Trader mario = new Trader("Mario", "Milan");
         Trader alan = new Trader("Alan", "Cambridge");
@@ -238,7 +244,17 @@ public class Main {
                                 traderTier.get(transaction.getTrader())
                                         .contains(TransactionSize.LARGE)
                 ));
-
+        // partition nums into primes and non prime
     }
 
+    public static boolean isPrime(int candidate) {
+        int candidateRoot = (int) Math.sqrt((double) candidate);
+        return IntStream.rangeClosed(2, candidateRoot)
+                .noneMatch(i -> candidate % i == 0);
+    }
+
+    public static Map<Boolean, List<Integer>> partitionPrimes(int n) {
+        return IntStream.rangeClosed(2, n).boxed()
+                .collect(partitioningBy(Main::isPrime));
+    }
 }
