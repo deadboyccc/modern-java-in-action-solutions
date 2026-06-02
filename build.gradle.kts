@@ -2,6 +2,7 @@ plugins {
     java
     // Shadow has moved to GradleUp org — new plugin ID, new version
     id("com.gradleup.shadow") version "9.4.1"
+    kotlin("jvm")
 }
 
 group = "dev.dead"
@@ -30,6 +31,7 @@ dependencies {
 
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    implementation(kotlin("stdlib-jdk8"))
 }
 
 tasks.shadowJar {
