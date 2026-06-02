@@ -1,6 +1,8 @@
 package Spliterator;
 
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 public class IterativeApproachCountWords {
     static void main() {
@@ -23,6 +25,22 @@ public class IterativeApproachCountWords {
 
         System.out.println("Sequential Word count: " + wordCounter.getCounter());
         System.out.println("Parallel Word count: " + countParallel.getCounter());
+
+        // Spliterator Parallel approach
+        // 1. Create the Spliterator instance
+        WordCounterSpliterator spliterator = new WordCounterSpliterator(SENTENCE);
+
+        // 2. Create a Parallel Stream from the Spliterator (true = parallel)
+        Stream<Character> stream = StreamSupport.stream(spliterator, true);
+
+        // 3. Reduce the stream using the WordCounter accumulator and combiner
+        WordCounter parallelWordCounter = stream.reduce(
+                new WordCounter(0, true), // Identity/Starting state
+                WordCounter::accumulate,    // Accumulator (how to add a char)
+                WordCounter::combine        // Combiner (how to merge two distinct chunks)
+        );
+
+        System.out.println("Parallel Spliterator  words found: " + parallelWordCounter.getCounter());
 
 
     }
