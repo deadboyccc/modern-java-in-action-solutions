@@ -22,7 +22,7 @@ public class TestSystemUtils {
             System.out.println("[Shutdown Hook] Cleanup complete.");
         }));
 
-        System.out.println("=== Initial Heap Memory Memory ===");
+        System.out.println("=== Initial Heap Memory ===");
         printMemoryMetrics(rt);
 
         // 2. Simulating Explicit Heap Allocation

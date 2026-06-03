@@ -1,2 +1,3 @@
 ./gradlew shadowJar
-java -jar build/benchmarks.jar StreamParallelBenchmarg
+java -jar build/libs/benchmarks.jar SimpleHarnessBenchmark
+#java -jar build/libs/benchmarks.jar StreamParallelBenchmargk

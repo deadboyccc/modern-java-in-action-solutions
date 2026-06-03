@@ -7,9 +7,9 @@ import java.util.stream.IntStream;
 
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
-@Fork(value = 2, jvmArgs = {"-Xms4G", "-Xmx4G"})
-@Warmup(iterations = 3, time = 1, timeUnit = TimeUnit.SECONDS)
-@Measurement(iterations = 5, time = 1, timeUnit = TimeUnit.SECONDS)
+@Fork(jvmArgs = {"-Xms4G", "-Xmx4G"})
+@Warmup(iterations = 2, time = 1, timeUnit = TimeUnit.SECONDS)
+@Measurement(iterations = 2, time = 1, timeUnit = TimeUnit.SECONDS)
 public class SimpleHarnessBenchmark {
 
     @Benchmark
