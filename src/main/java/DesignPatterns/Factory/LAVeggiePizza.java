@@ -1,15 +1,14 @@
 package DesignPatterns.Factory;
 
 import java.util.Collections;
-import java.util.List;
 
 public class LAVeggiePizza extends Pizza {
+    LAPizzaIngredientFactory ingredientFactory;
 
-    public LAVeggiePizza() {
-        super("LA Veggie", "LA dough", "LA Sauce", Collections.singletonList("test1"));
+    public LAVeggiePizza(LAPizzaIngredientFactory ingredientFactory) {
+        this.ingredientFactory = ingredientFactory;
+        super("LA Veggie", ingredientFactory.createDough(), ingredientFactory.createSauce()
+                , Collections.singletonList("test1"));
     }
 
-    protected LAVeggiePizza(String name, String dough, String sauce, List<String> toppings) {
-        super(name, dough, sauce, toppings);
-    }
 }

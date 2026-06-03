@@ -6,11 +6,11 @@ import java.util.List;
 public abstract class Pizza {
 
     private final String name;
-    private final String dough;
-    private final String sauce;
+    private final Dough dough;
+    private final Sauce sauce;
     private final List<String> toppings = new ArrayList<>();
 
-    protected Pizza(String name, String dough, String sauce, List<String> toppings) {
+    protected Pizza(String name, Dough dough, Sauce sauce, List<String> toppings) {
         this.name = name;
         this.dough = dough;
         this.sauce = sauce;
