@@ -1,0 +1,13 @@
+[2026-06-10 10:45:01] INFO  - Application started successfully on port 8080.
+[2026-06-10 10:45:03] DEBUG - Initializing database connection pool...
+[2026-06-10 10:45:05] INFO  - Database connection established.
+[2026-06-10 10:45:12] WARN  - Memory usage is at 78%. Consider optimizing heap allocation.
+ERROR: NullPointerException at dev.dead.ch9.FileProcessor.main(FileProcessor.java:26)
+[2026-06-10 10:45:15] INFO  - User 'ahmed' successfully logged in.
+[2026-06-10 10:45:22] DEBUG - Fetching user profile data from cache.
+ERROR: FileNotFoundException: /hamlet.txt (No such file or directory)
+[2026-06-10 10:45:30] WARN  - API gateway response time is slower than usual (1200ms).
+ERROR: ConnectException: Connection refused to payment-gateway.service.internal
+[2026-06-10 10:45:45] INFO  - Scheduled background cleanup task completed.
+ERROR: SQLException: ORA-00942: table or view does not exist
+[2026-06-10 10:46:00] DEBUG - Garbage collection invoked manually.
