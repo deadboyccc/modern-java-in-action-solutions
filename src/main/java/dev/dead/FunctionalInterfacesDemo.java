@@ -9,6 +9,12 @@ public class FunctionalInterfacesDemo {
         var list = List.of("hello", "world");
         printProcessed(list, l -> Optional.of(l.getFirst()));
         printProcessed(list, l -> Optional.of(l.getLast()));
+        printProcessed(list, new ListProcessor() {
+            @Override
+            public Optional<String> process(List<String> l) {
+                return Optional.of("SSSSSSSSSSSSSSSSSSSSSSS");
+            }
+        });
 
 
     }
