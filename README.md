@@ -24,4 +24,3 @@ Focus on isolating components and writing maintainable, highly descriptive test 
 Declarative SQL patterns, analytical window functions, advanced aggregations, and relational modeling strategies.  
 Focus on writing expressive, database-native logic.
 
-## 🎯 Approach
