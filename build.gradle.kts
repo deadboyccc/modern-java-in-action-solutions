@@ -33,7 +33,10 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     implementation(kotlin("stdlib-jdk8"))
 }
-
+// build.gradle.kts (Kotlin DSL)
+tasks.test {
+    useJUnitPlatform()
+}
 tasks.shadowJar {
     archiveBaseName = "benchmarks"
     archiveClassifier = ""
