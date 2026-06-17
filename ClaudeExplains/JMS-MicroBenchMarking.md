@@ -1,1102 +1,639 @@
-# JMH & JVM Microbenchmarking — Complete Reference Guide
+# JMH Practical Guide — Measure Java Performance Without Getting Fooled
 
-> **Goal:** Master JMH fast. Understand why naïve benchmarks lie, how the JIT compiler can silently invalidate your
-> tests, and how to measure parallel stream performance correctly.
+> **Goal:** Write benchmarks that tell the truth. Understand *why* naïve benchmarks silently lie, and know the handful
+> of annotations and patterns you'll use in every real benchmark.
 
 ---
 
 ## Table of Contents
 
-1. [Why Microbenchmarking on the JVM Is Hard](#1-why-microbenchmarking-on-the-jvm-is-hard)
-2. [JMH Architecture — The Controlled Environment](#2-jmh-architecture--the-controlled-environment)
-3. [Core Annotations Cheat Sheet](#3-core-annotations-cheat-sheet)
-4. [The JIT Compiler vs. Your Benchmark](#4-the-jit-compiler-vs-your-benchmark)
-5. [State Management — @State and Scope](#5-state-management--state-and-scope)
-6. [Blackhole — Consuming Results Correctly](#6-blackhole--consuming-results-correctly)
-7. [Stream Parallelism & the ForkJoinPool Engine](#7-stream-parallelism--the-forkjoinpool-engine)
-8. [Memory & GC Topology Under Benchmarks](#8-memory--gc-topology-under-benchmarks)
-9. [Benchmark Modes](#9-benchmark-modes)
-10. [Common Pitfalls & How to Fix Them](#10-common-pitfalls--how-to-fix-them)
-11. [Full Working Examples](#11-full-working-examples)
-12. [Reading JMH Output](#12-reading-jmh-output)
-13. [Quick Decision Guide](#13-quick-decision-guide)
+1. [The Core Problem — Why Java Benchmarks Lie](#1-the-core-problem--why-java-benchmarks-lie)
+2. [How JMH Solves It](#2-how-jmh-solves-it)
+3. [The 6 Annotations You Actually Need](#3-the-6-annotations-you-actually-need)
+4. [Your First Correct Benchmark](#4-your-first-correct-benchmark)
+5. [The 3 Silent Killers — and Their Fixes](#5-the-3-silent-killers--and-their-fixes)
+6. [State — Managing Your Benchmark's Data](#6-state--managing-your-benchmarks-data)
+7. [Benchmark Modes — What Are You Actually Measuring?](#7-benchmark-modes--what-are-you-actually-measuring)
+8. [Reading JMH Output](#8-reading-jmh-output)
+9. [Parallel Streams — When to Use Them](#9-parallel-streams--when-to-use-them)
+10. [Common Mistakes Checklist](#10-common-mistakes-checklist)
+11. [Project Setup](#11-project-setup)
 
 ---
 
-## 1. Why Microbenchmarking on the JVM Is Hard
+## 1. The Core Problem — Why Java Benchmarks Lie
 
-The JVM is a **heavily speculative, adaptive runtime**. What you write in Java and what actually executes at the CPU
-level are often completely different things. Several forces work against naïve benchmarks:
+When you write a Java loop to time something yourself, you're not measuring what you think you are. The JVM actively
+rewrites your code as it runs, in ways that are invisible to you but completely legal because they don't change the
+program's *observable* output.
 
-| JVM Optimization                | What It Does                                                           | Benchmark Impact                                                 |
-|---------------------------------|------------------------------------------------------------------------|------------------------------------------------------------------|
-| **Dead Code Elimination (DCE)** | Removes computations whose results are never used                      | Loop runs in 0ns — nothing happened                              |
-| **Constant Folding**            | Replaces constant expressions with their compile-time values           | Your "loop" becomes a single value assignment                    |
-| **Loop Unrolling**              | Expands short loops inline to avoid branch overhead                    | Timing reflects unrolled code, not realistic behavior            |
-| **Speculative Inlining**        | Inlines a method assuming only one concrete type ever arrives          | Benchmark runs fast; production code with polymorphism does not  |
-| **Escape Analysis**             | Detects objects that never leave the current thread's stack            | Heap allocations eliminated entirely — allocation benchmarks lie |
-| **OSR (On-Stack Replacement)**  | Replaces a running interpreted method mid-execution with compiled code | Warmup-phase timing is meaningless                               |
+### The JIT Compiler: Your Benchmarking Enemy
 
-**The fundamental rule:** never write a benchmark loop without JMH. The JIT optimizer will eat it.
+JIT stands for *Just-In-Time* compiler. The JVM doesn't interpret your bytecode forever — it watches which methods run
+frequently and compiles those to native machine code at runtime, applying aggressive optimizations. This is why Java can
+be fast. It's also why naïve benchmarks are useless.
+
+Here are the three optimizations that destroy benchmarks most often:
 
 ---
 
-## 2. JMH Architecture — The Controlled Environment
+### Optimization 1: Dead Code Elimination (DCE)
 
-JMH generates source code that wraps your annotated methods. It compiles and runs them as separate OS processes with
-carefully staged phases.
+**What it is:** If the JVM can prove that a computation's result is never *used* anywhere observable (printed, returned,
+stored in a field another thread could see), it simply deletes the computation entirely. Zero nanoseconds. No work done.
 
-### The Execution Pipeline
-
-```
-Source Code
-    │
-    ▼
-JMH Annotation Processor  ──► generates benchmark runner classes
-    │
-    ▼
-@Fork — new OS process (clean JIT profile, clean heap)
-    │
-    ├──► @Warmup iterations  (JIT compiles, OSR fires, code stabilizes)
-    │         │
-    │         └── Tier 1 (C1/Client) → Tier 2 (C2/Server) compilation
-    │
-    └──► @Measurement iterations  (timing collected here only)
-```
-
-### Why `@Fork` Is Non-Negotiable
+**Concrete example:**
 
 ```java
-@Fork(value = 2, jvmArgs = {"-Xms4G", "-Xmx4G"})
-```
+// You think you're measuring a 10-million-iteration sum loop.
+// The JVM sees a local variable 'sum' that is computed and then thrown away.
+// It proves: removing this loop changes nothing the outside world can observe.
+// So it removes the entire loop. Your benchmark reports ~0 ns. Total lie.
 
-**Profile pollution:** The JIT uses **MethodDataObjects (MDOs)** to track which concrete types arrive at a call site. A
-monomorphic call site (one type) gets fast direct dispatch. A megamorphic call site (3+ types) loses inlining entirely.
-Running two benchmarks in the same process contaminates each other's MDOs.
-
-**Heap determinism:** Setting `-Xms == -Xmx` locks heap boundaries at startup. The OS never needs to map more memory
-pages mid-run. GC thresholds stay identical across every fork. Without this, GC timing variance bleeds into your
-measurements.
-
-**Rule of thumb:** Always use at least `@Fork(2)`. Use `@Fork(3)` for publishable results.
-
-### Warmup vs. Measurement — What Actually Happens
-
-```java
-@Warmup(iterations = 3, time = 1)       // 3 × 1-second warmup rounds
-@Measurement(iterations = 5, time = 1)  // 5 × 1-second measurement rounds
-```
-
-JVM compilation tiers during warmup:
-
-```
-First call         → Interpreter (slowest, no optimization)
-~100 invocations   → C1 Tier 1 (profiled, lightly optimized)
-~10,000 invocations→ C1 Tier 2 (profiled + inlining hints)
-~10,000+ + MDO     → C2 Tier 4 (heavily optimized, speculative inlining, loop transforms)
-```
-
-Measurement only begins once C2-compiled native code is **stable**. If you reduce warmup too aggressively, you're
-measuring C1 code, not C2 code — a 5–50× difference in throughput.
-
----
-
-## 3. Core Annotations Cheat Sheet
-
-```java
-
-@BenchmarkMode(Mode.AverageTime)
-@OutputTimeUnit(TimeUnit.MICROSECONDS)
-@State(Scope.Benchmark)
-@Warmup(iterations = 3, time = 1, timeUnit = TimeUnit.SECONDS)
-@Measurement(iterations = 5, time = 1, timeUnit = TimeUnit.SECONDS)
-@Fork(value = 2, jvmArgs = {"-Xms512m", "-Xmx512m"})
-public class MyBenchmark {
-
-    // fields here are @State
-
-    @Setup(Level.Trial)    // runs once before entire trial
-    public void setup() { ...}
-
-    @TearDown(Level.Iteration)  // runs after each measurement iteration
-    public void teardown() { ...}
-
-    @Benchmark
-    public long myMethod() { ...}
-}
-```
-
-### Annotation Reference
-
-| Annotation        | Key Parameters                   | Purpose                               |
-|-------------------|----------------------------------|---------------------------------------|
-| `@Benchmark`      | —                                | Marks the method to measure           |
-| `@BenchmarkMode`  | `Mode.*`                         | What to measure (see §9)              |
-| `@OutputTimeUnit` | `TimeUnit.*`                     | Unit for reported results             |
-| `@Fork`           | `value`, `jvmArgs`, `warmups`    | Process isolation count and JVM flags |
-| `@Warmup`         | `iterations`, `time`, `timeUnit` | Warmup phase config                   |
-| `@Measurement`    | `iterations`, `time`, `timeUnit` | Measurement phase config              |
-| `@State`          | `Scope.*`                        | Declares lifecycle of an object       |
-| `@Setup`          | `Level.*`                        | Code to run before benchmarking       |
-| `@TearDown`       | `Level.*`                        | Code to run after benchmarking        |
-| `@Param`          | `{values}`                       | Parameterize over multiple inputs     |
-
-### `@Setup` / `@TearDown` Levels
-
-| Level              | Runs                                                                                           |
-|--------------------|------------------------------------------------------------------------------------------------|
-| `Level.Trial`      | Once per entire benchmark run (all forks × all iterations)                                     |
-| `Level.Iteration`  | Once per measurement/warmup iteration                                                          |
-| `Level.Invocation` | Every single benchmark method call — **use with extreme caution**, the overhead is significant |
-
----
-
-## 4. The JIT Compiler vs. Your Benchmark
-
-### Dead Code Elimination — The Silent Killer
-
-```java
-// WRONG — JIT will eliminate this loop entirely
-@Benchmark
-public void deadLoop() {
+public void broken() {
     long sum = 0;
     for (int i = 0; i < 10_000_000; i++) {
-        sum += i;  // result never used outside this method
+        sum += i;   // sum is never returned, stored, or printed
     }
-    // sum is discarded → JIT removes the loop → ~0ns measurement
+    // sum is discarded here → JVM deletes the loop
 }
 ```
 
-The C2 compiler performs **escape analysis**: `sum` never escapes the method stack frame, so the entire computation is
-provably side-effect-free and is deleted.
-
-**Fix:** Return the value, or consume it with a `Blackhole` (see §6).
+**The fix:** Return the value. Returning it forces the JVM to keep the computation, because the caller now depends on
+the result.
 
 ```java
-// CORRECT — return forces the JIT to keep the computation
-@Benchmark
-public long seqSum() {
+public long correct() {
     long sum = 0;
     for (int i = 0; i < 10_000_000; i++) {
         sum += i;
     }
-    return sum;  // now the caller depends on the value
+    return sum;   // caller depends on this → loop cannot be deleted
 }
 ```
 
-### Constant Folding
+---
+
+### Optimization 2: Constant Folding
+
+**What it is:** If a computation depends only on values the JVM knows at compile time (constants, `static final`
+fields), it computes the answer once and replaces your loop with a single hardcoded number.
+
+**Concrete example:**
 
 ```java
-// DANGEROUS — count is a compile-time constant
+// COUNT is a compile-time constant. The JVM knows:
+//   sum of 0..9,999,999 = 49,999,995,000,000
+// It replaces your loop with a single assignment. Benchmark: ~0 ns. Another lie.
+
 public static final int COUNT = 10_000_000;
 
-@Benchmark
-public long constantLoop() {
+public long broken() {
     long sum = 0;
     for (int i = 0; i < COUNT; i++) {
         sum += i;
     }
-    return sum;
-    // C2 applies: sum = COUNT * (COUNT - 1) / 2 = 49_999_995_000_000L
-    // The entire loop is replaced with a single constant → ~0ns
+    return sum;   // JVM already knows this is 49,999,995,000,000 → replaces loop
 }
 ```
 
-The arithmetic series formula `n(n-1)/2` is well-known to the optimizer. Any loop over a constant range summing indices
-will be folded.
-
-**Fix:** Put constants in a `@State` object — the JIT cannot assume the value of an object field is constant across
-invocations.
+**The fix:** Put your data in a `@State` object (explained in §6). The JVM cannot assume that an object's field holds
+the same value across method calls, so it must actually run the loop.
 
 ```java
+// In a @State class:
+public int count = 10_000_000;   // NOT final — the JVM can't fold this
 
-@State(Scope.Benchmark)
-public static class BenchmarkState {
-    public int count = 10_000_000;  // NOT final — defeats constant folding
-}
-
-@Benchmark
-public long safeSum(BenchmarkState state) {
+// In your benchmark:
+public long correct(MyState state) {
     long sum = 0;
     for (int i = 0; i < state.count; i++) {
         sum += i;
     }
-    return sum;  // real work, real timing
+    return sum;   // real work, real timing
 }
 ```
-
-### Speculative Inlining & Monomorphic Call Sites
-
-The JIT optimizes heavily when it has seen only one concrete type at a call site:
-
-```java
-// JIT inlines this aggressively — only one concrete List implementation seen
-List<Integer> list = new ArrayList<>(data);
-list.
-
-stream().
-
-mapToInt(Integer::intValue).
-
-sum();
-```
-
-If your benchmark always uses `ArrayList`, the JIT inlines `ArrayList.spliterator()` directly. In production code using
-mixed collection types, this optimization evaporates and you have a megamorphic dispatch overhead the benchmark never
-measured.
-
-**Rule:** Benchmark the shapes of code that match production. If production uses `List<>` polymorphically, your
-benchmark should too.
 
 ---
 
-## 5. State Management — `@State` and Scope
+### Optimization 3: Warmup — You're Not Always Measuring the Same Code
 
-`@State` tells JMH how to manage the lifecycle and sharing of a benchmark's data. Choosing the wrong scope gives you
-incorrect results.
+**What it is:** When Java code first runs, it's *interpreted* — executed slowly, instruction by instruction. After a
+method is called about 10,000 times, the JIT compiles it to native machine code (5–50× faster). This process is called
+*warmup*.
 
-### Scope Options
+**Why this matters for benchmarks:** If you start timing too early, you measure the slow interpreter, not the fast
+compiled code. Your numbers are meaningless for predicting production performance.
 
-```java
-@State(Scope.Benchmark)   // one instance shared across all threads
-@State(Scope.Thread)      // each benchmark thread gets its own instance
-@State(Scope.Group)       // shared within a @BenchmarkMode group
+```
+First call               → Interpreter (slow)
+~100 invocations         → Lightly compiled (C1 tier)
+~10,000 invocations      → Fully optimized native code (C2 tier) ← THIS is production behavior
 ```
 
-#### `Scope.Benchmark` — Shared State
-
-```java
-
-@State(Scope.Benchmark)
-public class SharedState {
-    public List<Integer> data;
-
-    @Setup(Level.Trial)
-    public void setup() {
-        data = IntStream.range(0, 1_000_000)
-                .boxed()
-                .collect(Collectors.toList());
-    }
-}
-```
-
-Use when: data is read-only and shared across threads. Avoids redundant allocations.
-
-**Warning:** If benchmark threads **write** to shared state, you introduce false sharing and lock contention into your
-measurement.
-
-#### `Scope.Thread` — Thread-Local State
-
-```java
-
-@State(Scope.Thread)
-public class ThreadLocalState {
-    public Random rng;
-
-    @Setup(Level.Iteration)
-    public void setup() {
-        rng = new Random(42);  // each thread gets a private RNG
-    }
-}
-```
-
-Use when: the benchmark involves mutable state (accumulators, random generators, counters) that should not be shared.
-
-### `@Param` — Sweep Over Inputs
-
-```java
-
-@State(Scope.Benchmark)
-public class ParamState {
-    @Param({"100", "1000", "10000", "1000000"})
-    public int dataSize;
-
-    public List<Integer> data;
-
-    @Setup(Level.Trial)
-    public void setup() {
-        data = IntStream.range(0, dataSize).boxed().collect(Collectors.toList());
-    }
-}
-```
-
-JMH runs the full benchmark suite for **each** param value. Results show performance characteristics across the input
-size range — critical for finding the parallel stream crossover point.
+**The fix:** Always have a warmup phase before measuring. JMH handles this automatically.
 
 ---
 
-## 6. Blackhole — Consuming Results Correctly
+## 2. How JMH Solves It
 
-A `Blackhole` is JMH's mechanism for consuming values without them being optimized away, and without the cost of a real
-side effect.
+JMH (Java Microbenchmark Harness) is the official OpenJDK tool for benchmarking. It doesn't just time your method — it
+generates a complete benchmark runner around your annotated methods, with:
+
+- A **warmup phase** that lets the JIT fully optimize your code before any timing starts
+- **Forked processes** — each benchmark runs in a fresh JVM to prevent one benchmark from contaminating another's
+  optimizer state
+- **Blackhole** objects to consume results and defeat dead code elimination
+- Statistically sound output with confidence intervals
+
+You annotate your methods. JMH generates the infrastructure. You never write `System.nanoTime()` yourself.
+
+---
+
+## 3. The 6 Annotations You Actually Need
+
+These cover 90% of real-world JMH usage.
 
 ```java
+@BenchmarkMode(Mode.AverageTime)          // What to measure (§7)
+@OutputTimeUnit(TimeUnit.MICROSECONDS)    // Unit for results
+@State(Scope.Benchmark)                   // Marks this class as holding benchmark data (§6)
+@Warmup(iterations = 3, time = 1)         // 3 warmup rounds, 1 second each
+@Measurement(iterations = 5, time = 1)   // 5 measurement rounds, 1 second each
+@Fork(2)                                  // Run in 2 separate JVM processes
+public class MyBenchmark {
 
-@Benchmark
-public void multipleResults(Blackhole bh, BenchmarkState state) {
-    long sum = 0;
-    for (int i = 0; i < state.count; i++) {
-        sum += i;
-        bh.consume(sum);  // prevents DCE on intermediate values
+    public int dataSize = 1_000_000;      // NOT final — prevents constant folding
+
+    @Benchmark                            // This method gets measured
+    public long myMethod() {
+        long sum = 0;
+        for (int i = 0; i < dataSize; i++) sum += i;
+        return sum;                       // return defeats dead code elimination
     }
 }
 ```
 
-### When to Use `return` vs. `Blackhole`
+### Annotation Quick Reference
 
-| Situation                               | Use                                                                                |
-|-----------------------------------------|------------------------------------------------------------------------------------|
-| Single computed result                  | `return value` — JMH sinks the return value automatically                          |
-| Multiple intermediate values            | `bh.consume(v1); bh.consume(v2);`                                                  |
-| void computation with side-effect check | `bh.consume(result)`                                                               |
-| Object allocation benchmarks            | `bh.consume(new MyObject())` — prevents escape analysis from eliminating the `new` |
+| Annotation        | What It Does                                                              | Sensible Default             |
+|-------------------|---------------------------------------------------------------------------|------------------------------|
+| `@Benchmark`      | Marks the method to measure                                               | Required on every method     |
+| `@BenchmarkMode`  | What metric to collect (time, throughput, etc.)                           | `Mode.AverageTime`           |
+| `@OutputTimeUnit` | Unit for the reported numbers                                             | `TimeUnit.MICROSECONDS`      |
+| `@Warmup`         | How many warmup rounds before timing starts                               | `iterations=3, time=1`       |
+| `@Measurement`    | How many rounds to actually measure                                       | `iterations=5, time=1`       |
+| `@Fork`           | How many separate JVM processes to run (each gets a clean optimizer state) | `2` for dev, `3` for publishing |
+| `@State`          | Marks a class as holding data for benchmarks (explained in §6)            | `Scope.Benchmark`            |
+
+### `@Fork` — Why Separate Processes Matter
+
+When two benchmarks run in the same JVM, they interfere. The JIT's optimizer "remembers" which types it has seen
+at each call site. If benchmark A always called `ArrayList.get()`, the JIT optimized assuming only `ArrayList`. When
+benchmark B runs with a `LinkedList`, the optimizer's assumptions are wrong and it de-optimizes — making B look slow
+for reasons unrelated to what you're testing.
+
+Running each benchmark in a **fresh process** gives it a clean optimizer with no memory of other benchmarks.
 
 ```java
-// Benchmarking object creation — must consume to prevent elimination
-@Benchmark
-public void objectAllocation(Blackhole bh) {
-    bh.consume(new byte[1024]);  // without this, the allocation disappears
-}
+@Fork(2)  // Runs the full benchmark in 2 separate JVM processes, averages results
+          // More forks = more trustworthy results, but longer runtime
 ```
-
-`Blackhole.consume()` compiles to a very low-overhead check that defeats DCE without introducing measurable bias. It is
-**not** a real write — it's a JMH-specific memory fence designed for this purpose.
 
 ---
 
-## 7. Stream Parallelism & the ForkJoinPool Engine
+## 4. Your First Correct Benchmark
 
-### How Parallel Streams Split Work — Spliterators
-
-When you call `.parallelStream()`, the stream framework calls `spliterator().trySplit()` recursively until subtasks are
-small enough to execute directly.
-
-```
-data.parallelStream()
-         │
-         ▼
-   Spliterator.trySplit()  →  left half   right half
-                                  │            │
-                            trySplit()    trySplit()
-                              │    │        │    │
-                            [L1] [L2]     [R1] [R2]   ← leaf tasks submitted to ForkJoinPool
-```
-
-**Splitting cost varies dramatically by data source:**
-
-| Source                  | Split Strategy                 | Cost                      | Balance                |
-|-------------------------|--------------------------------|---------------------------|------------------------|
-| `IntStream.range(0, n)` | `mid = (start + end) / 2`      | O(1) — pure arithmetic    | Perfect halves always  |
-| `ArrayList<T>`          | Divide array index offsets     | O(1) — pointer arithmetic | Perfect halves always  |
-| `LinkedList<T>`         | Must traverse to midpoint      | O(n) — pointer chasing    | Poor — avoid           |
-| `HashSet<T>`            | Internal bucket splitting      | O(n/parallelism)          | Uneven — unpredictable |
-| Unmodifiable wrappers   | Delegates to inner spliterator | Depends on wrapped type   | Depends                |
-
-**Practical implication:** If you need fast parallel streams, prefer `ArrayList` or primitive range streams. Avoid
-`LinkedList` and `Set` as parallel stream sources.
-
-```java
-// Fast: arithmetic split, no boxing
-IntStream.range(0,10_000_000).
-
-parallel().
-
-sum()
-
-// Slower: index split + pointer dereference for each Integer
-List<Integer> list = new ArrayList<>();
-list.
-
-parallelStream().
-
-mapToLong(Integer::longValue).
-
-sum()
-
-// Slow: O(n) split cost, kills parallelism advantage
-LinkedList<Integer> linked = new LinkedList<>();
-linked.
-
-parallelStream().
-
-sum()  // don't do this
-```
-
-### The ForkJoinPool Work-Stealing Architecture
-
-```
-                    ┌─────────────────────┐
-                    │   Global Submit()   │
-                    │   Queue (shared)    │
-                    └──────────┬──────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              ▼                ▼                ▼
-        ┌──────────┐     ┌──────────┐     ┌──────────┐
-        │ Worker 0 │     │ Worker 1 │     │ Worker 2 │
-        │ [Deque]  │     │ [Deque]  │     │ [Deque]  │
-        │ HEAD◄──  │     │ HEAD◄──  │     │ HEAD◄──  │
-        │  own work│     │  own work│     │  own work│
-        │  ──►TAIL │     │  ──►TAIL │     │  ──►TAIL │
-        └──────┬───┘     └──────────┘     └──────┬───┘
-               │   steal from tail                │
-               └─────────────────────────────────►│
-                  (Worker 0 steals Worker 2's tail)
-```
-
-**Key mechanics:**
-
-- Workers push/pop their own tasks from the **head** (LIFO — preserves cache locality for depth-first work)
-- Workers **steal** from the **tail** of other queues (FIFO — takes the oldest/largest tasks, minimizes steal frequency)
-- Stealing is rare under balanced workloads — most tasks execute thread-locally
-
-### Submitting to a Custom ForkJoinPool
-
-By default, `parallelStream()` uses `ForkJoinPool.commonPool()`. This means all parallel streams in your JVM share the
-same pool. In a production server this causes interference between unrelated parallel operations.
-
-```java
-// WRONG: uses common pool — shared with everything else in the JVM
-data.parallelStream().
-
-mapToLong(Integer::longValue).
-
-sum();
-
-// CORRECT: dedicated pool, isolated execution
-ForkJoinPool customPool = new ForkJoinPool(4);  // 4 worker threads
-
-long result = customPool.submit(
-        () -> data.parallelStream().mapToLong(Integer::longValue).sum()
-).get();
-```
-
-**How the hijacking works:** The stream framework checks `Thread.currentThread()` before submitting fork tasks. If the
-current thread is a `ForkJoinWorkerThread`, its child tasks are registered with **that thread's pool**, not the common
-pool. Submitting to `customPool` makes the initiating thread a worker in that pool, so all downstream fork tasks land
-there too.
-
-```java
-// Benchmarking both pool strategies
-@State(Scope.Benchmark)
-public class PoolBenchmark {
-    private List<Integer> data;
-    private ForkJoinPool customPool;
-
-    @Setup(Level.Trial)
-    public void setup() {
-        data = IntStream.range(0, 1_000_000).boxed().collect(Collectors.toList());
-        customPool = new ForkJoinPool(
-                Runtime.getRuntime().availableProcessors()
-        );
-    }
-
-    @TearDown(Level.Trial)
-    public void teardown() {
-        customPool.shutdown();
-    }
-
-    @Benchmark
-    public long commonPoolSum() {
-        return data.parallelStream().mapToLong(Integer::longValue).sum();
-    }
-
-    @Benchmark
-    public long customPoolSum() throws Exception {
-        return customPool.submit(
-                () -> data.parallelStream().mapToLong(Integer::longValue).sum()
-        ).get();
-    }
-}
-```
-
-### The Parallel Stream Crossover Point
-
-Parallelism has a fixed overhead: task splitting, thread scheduling, and join synchronization. It only pays off when the
-per-element work exceeds this overhead.
-
-```
-Total parallel time = Split overhead + (Work / N threads) + Join overhead
-Total sequential time = Work
-
-Parallel wins when: (Work / N threads) + overhead < Work
-```
-
-**Empirical thresholds for simple numeric reductions:**
-
-| Data Size        | Recommendation                          |
-|------------------|-----------------------------------------|
-| < 1,000          | Sequential always wins                  |
-| 1,000 – 10,000   | Depends on per-element cost             |
-| 10,000 – 100,000 | Parallel usually wins for pure CPU work |
-| > 100,000        | Parallel wins unless memory-bound       |
-
-For non-trivial per-element work (e.g., I/O, complex transforms), the crossover drops much lower.
-
----
-
-## 8. Memory & GC Topology Under Benchmarks
-
-### Thread-Local Allocation Buffers (TLABs)
-
-The JVM gives each thread a private chunk of heap called a **TLAB**. Object allocation inside a TLAB is just a pointer
-bump — no locks, near zero cost.
-
-```
-Heap (Eden Space)
-┌─────────────────────────────────────────────────┐
-│  Thread-0 TLAB          │  Thread-1 TLAB         │
-│  [start_ptr → end_ptr]  │  [start_ptr → end_ptr] │
-│  Objects: A, B, C       │  Objects: X, Y, Z      │
-└─────────────────────────────────────────────────┘
-         ▲                          ▲
-    Fast-path alloc            Fast-path alloc
-    (pointer bump, no lock)    (pointer bump, no lock)
-```
-
-**TLAB exhaustion:** When a thread fills its TLAB faster than GC can reclaim space, the JVM falls back to **slow-path
-allocation** — acquiring a global lock to request a new TLAB from the shared heap. Under high-concurrency allocation (
-like parallel stream `collect()`), this becomes a bottleneck.
-
-### Why `parallelStream().collect()` Underperforms
-
-```java
-// This looks parallel but has significant serial bottlenecks
-return data.parallelStream()
-           .
-
-filter(n ->n %2==0)
-        .
-
-collect(Collectors.toList());
-```
-
-**What happens internally:**
-
-```
-Thread 0: filter → produce sub-list [0, 2, 4, ...]
-Thread 1: filter → produce sub-list [100002, 100004, ...]
-Thread 2: filter → produce sub-list [200000, 200002, ...]
-Thread 3: filter → produce sub-list [300000, 300002, ...]
-                                         │
-                                         ▼
-                              SINGLE-THREAD MERGE
-                              [0,2,4,...,100002,100004,...] ← O(N) serial step
-```
-
-Problems:
-
-1. **Allocation pressure:** Each thread produces an intermediate `ArrayList`. Rapid allocation exhausts TLABs →
-   slow-path heap locks
-2. **Single-threaded merge:** The final combine step is serial, O(N). On large datasets it often erases the parallel
-   filtering benefit
-3. **GC pressure:** All intermediate lists become garbage immediately after merge, triggering Young Gen evacuations
-
-**Better alternatives for collection benchmarks:**
-
-```java
-// Option 1: count only (no collection, no merge)
-long count = data.parallelStream().filter(n -> n % 2 == 0).count();
-
-// Option 2: primitive array (avoids boxing overhead and reduces GC pressure)
-int[] evens = data.parallelStream()
-        .filter(n -> n % 2 == 0)
-        .mapToInt(Integer::intValue)
-        .toArray();
-
-// Option 3: Collectors.toUnmodifiableList() (Java 10+, slightly optimized merge)
-List<Integer> result = data.parallelStream()
-        .filter(n -> n % 2 == 0)
-        .collect(Collectors.toUnmodifiableList());
-```
-
-### G1GC Under Benchmark Constraints
-
-```java
-@Fork(jvmArgs = {"-Xms512m", "-Xmx512m", "-XX:+UseG1GC"})
-```
-
-G1 divides the heap into equal-sized regions (~1–32 MB each). Under memory pressure from allocation-heavy parallel
-benchmarks:
-
-```
-G1 Heap (512 MB, regions ~8 MB each)
-┌──┬──┬──┬──┬──┬──┬──┬──┐
-│E │E │E │E │S │O │O │O │   E=Eden, S=Survivor, O=Old
-└──┴──┴──┴──┴──┴──┴──┴──┘
-         │
-         ▼  (Eden fills up from parallel allocations)
-    Young GC triggered → Stop-The-World pause
-         │
-         ▼  (surviving objects promoted to Old)
-    Old regions fill → Mixed GC → longer STW pauses
-```
-
-**The STW pause problem:** JMH measures wall-clock time for the entire iteration. A GC pause that lands mid-iteration
-adds directly to your reported latency. In an allocation-heavy parallel benchmark, GC pauses can contribute 20–50% of
-measured time — making the "parallel" result look worse than it actually is for computation.
-
-**GC tuning flags for benchmarks:**
-
-```bash
-# Larger young gen reduces GC frequency
--XX:NewRatio=1
-
-# Print GC activity so you can correlate with outlier iterations
--Xlog:gc*:file=gc.log
-
-# Disable GC entirely for allocation-free benchmarks (dangerous — OOM risk)
--XX:+UnlockExperimentalVMOptions -XX:+UseEpsilonGC
-```
-
-### False Sharing — The Silent Parallel Killer
-
-False sharing occurs when two threads modify **different variables that happen to live on the same cache line** (64
-bytes on x86).
-
-```java
-// BROKEN: sum0 and sum1 likely share a cache line
-// Every thread 0 write invalidates thread 1's cache line and vice versa
-public long sum0;
-public long sum1;
-```
-
-```java
-// FIXED: pad fields to occupy separate cache lines
-@sun.misc.Contended  // JVM annotation — adds padding automatically (JDK 8+)
-public long sum0;
-
-@sun.misc.Contended
-public long sum1;
-```
-
-To enable `@Contended` at runtime: `-XX:-RestrictContended`
-
-In JMH benchmarks, `@State(Scope.Thread)` objects are automatically padded by the framework. But if you manually store
-results in a shared array, you must pad yourself.
-
----
-
-## 9. Benchmark Modes
-
-```java
-@BenchmarkMode(Mode.AverageTime)
-// or combine multiple:
-@BenchmarkMode({Mode.AverageTime, Mode.Throughput})
-```
-
-| Mode                  | Measures                                      | Use When                                      |
-|-----------------------|-----------------------------------------------|-----------------------------------------------|
-| `Mode.Throughput`     | Operations per second                         | Maximizing throughput — caches, lookup tables |
-| `Mode.AverageTime`    | Average time per operation                    | General comparison of two implementations     |
-| `Mode.SampleTime`     | Distribution of operation times (percentiles) | Latency-sensitive code — p99, p999 matter     |
-| `Mode.SingleShotTime` | One cold execution                            | Startup cost, first-call latency              |
-| `Mode.All`            | All of the above                              | When you want the full picture                |
-
-**When to use `SampleTime`:**
-
-```java
-
-@BenchmarkMode(Mode.SampleTime)
-@OutputTimeUnit(TimeUnit.MICROSECONDS)
-@Benchmark
-public void latencySensitiveOp(Blackhole bh) {
-    bh.consume(myService.processRequest());
-}
-```
-
-`SampleTime` builds a histogram. JMH reports p50, p90, p95, p99, p99.9, p99.99. Use this for anything where tail latency
-matters (APIs, DB queries, lock contention detection).
-
----
-
-## 10. Common Pitfalls & How to Fix Them
-
-### Pitfall 1: Measuring Unwarmed Code
-
-```java
-// WRONG: only 1 iteration, no warmup → measuring C1 or interpreter
-@Warmup(iterations = 0)
-@Measurement(iterations = 1)
-```
-
-```java
-// CORRECT: give C2 time to stabilize
-@Warmup(iterations = 5, time = 2)
-@Measurement(iterations = 10, time = 2)
-```
-
-### Pitfall 2: Benchmarking Inside a Unit Test
-
-```java
-// WRONG: running JMH inside JUnit shares the JVM — profile pollution guaranteed
-@Test
-public void performanceTest() {
-    Options opts = new OptionsBuilder().include(MyBenchmark.class.getName()).build();
-    new Runner(opts).run();
-}
-```
-
-Run JMH benchmarks from a `main()` method or CI pipeline, never from within a test framework process.
-
-### Pitfall 3: Returning `void` Without Blackhole
-
-```java
-// WRONG: JIT eliminates the entire computation
-@Benchmark
-public void broken() {
-    Math.sqrt(12345.6789);  // result unused → deleted
-}
-
-// CORRECT
-@Benchmark
-public double fixed() {
-    return Math.sqrt(12345.6789);
-}
-```
-
-### Pitfall 4: Forgetting to Reset Mutable State
-
-```java
-
-@State(Scope.Thread)
-public class MutableState {
-    public int counter = 0;  // starts at 0
-
-    // MISSING: @Setup to reset counter between iterations
-    // After warmup, counter is millions → measurement behavior differs from warmup
-}
-```
-
-```java
-
-@Setup(Level.Iteration)
-public void reset() {
-    counter = 0;  // always start each measured iteration clean
-}
-```
-
-### Pitfall 5: Incorrect Parallel vs. Sequential Comparison
-
-```java
-// WRONG: comparing IntStream (primitive) sequential vs List<Integer> (boxed) parallel
-// You're measuring boxing overhead, not parallelism overhead
-@Benchmark
-public long sequential() {
-    return IntStream.range(0, COUNT).sum();
-}
-
-@Benchmark
-public long parallel() {
-    return data.parallelStream().mapToLong(Integer::longValue).sum();
-}
-
-// CORRECT: same data source, same types, only parallelism differs
-@Benchmark
-public long sequential() {
-    return data.stream().mapToLong(Integer::longValue).sum();
-}
-
-@Benchmark
-public long parallel() {
-    return data.parallelStream().mapToLong(Integer::longValue).sum();
-}
-```
-
-### Pitfall 6: System Load During Measurement
-
-JMH benchmarks are sensitive to background JVM activity. Run with:
-
-- Laptop plugged in (power management doesn't throttle CPU)
-- No browser, IDE, or IDE indexing running
-- Ideally on a server with no other load
-
----
-
-## 11. Full Working Examples
-
-### Example 1: SimpleHarnessBenchmark
+Here is a complete, correct benchmark comparing sequential vs. parallel sum over a list. Every decision is explained.
 
 ```java
 package com.example.benchmarks;
 
 import org.openjdk.jmh.annotations.*;
-
-import java.util.concurrent.TimeUnit;
-
-@BenchmarkMode(Mode.AverageTime)
-@OutputTimeUnit(TimeUnit.MICROSECONDS)
-@State(Scope.Benchmark)
-@Warmup(iterations = 3, time = 1)
-@Measurement(iterations = 5, time = 1)
-@Fork(value = 2, jvmArgs = {"-Xms4G", "-Xmx4G"})
-public class SimpleHarnessBenchmark {
-
-    // NOT final — prevents constant folding
-    public int count = 10_000_000;
-
-    @Benchmark
-    public long seqSum() {
-        long sum = 0L;
-        for (int i = 0; i < count; i++) {
-            sum += i;
-        }
-        return sum;  // returned value defeats DCE
-    }
-
-    @Benchmark
-    public double sqrtSum() {
-        double sum = 0;
-        for (int i = 0; i < count; i++) {
-            sum += Math.sqrt(i);
-        }
-        return sum;
-    }
-}
-```
-
-### Example 2: StreamParallelBenchmark
-
-```java
-package com.example.benchmarks;
-
-import org.openjdk.jmh.annotations.*;
-
 import java.util.*;
-import java.util.concurrent.*;
 import java.util.stream.*;
+import java.util.concurrent.TimeUnit;
 
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
 @Warmup(iterations = 3, time = 1)
 @Measurement(iterations = 5, time = 1)
-@Fork(value = 2, jvmArgs = {"-Xms512m", "-Xmx512m", "-XX:+UseG1GC"})
-public class StreamParallelBenchmark {
+@Fork(value = 2, jvmArgs = {"-Xms512m", "-Xmx512m"})
+//              ↑ Lock heap size so GC behavior is consistent across runs
+public class SumBenchmark {
 
+    // @Param runs the whole benchmark once per value listed here
     @Param({"1000", "100000", "1000000"})
     public int dataSize;
 
     private List<Integer> data;
-    private ForkJoinPool customPool;
+
+    // @Setup runs before timing starts — use it to prepare data
+    @Setup(Level.Trial)
+    public void setup() {
+        data = IntStream.range(0, dataSize)
+                        .boxed()
+                        .collect(Collectors.toList());
+    }
+
+    @Benchmark
+    public long sequential() {
+        return data.stream()
+                   .mapToLong(Integer::longValue)
+                   .sum();   // return value defeats dead code elimination
+    }
+
+    @Benchmark
+    public long parallel() {
+        return data.parallelStream()
+                   .mapToLong(Integer::longValue)
+                   .sum();
+    }
+}
+```
+
+**What each piece does:**
+
+- `@Param` — JMH runs every `@Benchmark` method with each param value. You get 6 rows of output (2 methods × 3 sizes).
+  This reveals the *crossover point* where parallel becomes faster than sequential.
+- `@Setup(Level.Trial)` — Builds the list once per JVM fork, before any warmup or measurement. `Level.Trial` means "the
+  entire run" — don't rebuild data between every single measurement iteration.
+- `-Xms512m -Xmx512m` — Sets both the minimum and maximum heap to the same value. This prevents the JVM from
+  requesting more memory mid-run, which would cause unpredictable pauses that corrupt your timing.
+- Returning `long` from each `@Benchmark` — defeats dead code elimination on both.
+
+---
+
+## 5. The 3 Silent Killers — and Their Fixes
+
+Quick reference for the problems from §1, with the exact patterns to use.
+
+### Killer 1: Dead Code Elimination
+
+**Symptom:** Benchmark reports suspiciously close to 0 ns/op.
+
+```java
+// BROKEN: result unused → loop deleted
+@Benchmark
+public void broken() {
+    Math.sqrt(99999.0);   // result thrown away
+}
+
+// FIXED: return the result
+@Benchmark
+public double fixed() {
+    return Math.sqrt(99999.0);
+}
+```
+
+**When you have multiple values to consume** (not just one return value), use `Blackhole`. JMH injects it
+automatically — just add it as a parameter:
+
+```java
+// Blackhole is JMH's "result sink" — consuming a value into it prevents
+// the JVM from deleting the computation, without actually doing real I/O.
+@Benchmark
+public void multipleValues(Blackhole bh) {
+    bh.consume(Math.sqrt(100.0));
+    bh.consume(Math.sqrt(200.0));
+    bh.consume(Math.sqrt(300.0));
+}
+```
+
+Use `Blackhole` when: you have multiple results, or you're benchmarking `void` methods where there's no value to return.
+
+---
+
+### Killer 2: Constant Folding
+
+**Symptom:** Sequential benchmark is suspiciously faster than you'd expect. Results don't scale with data size.
+
+```java
+// BROKEN: COUNT is a compile-time constant → loop becomes a single value
+public static final int COUNT = 10_000_000;
+
+@Benchmark
+public long broken() {
+    long sum = 0;
+    for (int i = 0; i < COUNT; i++) sum += i;
+    return sum;   // JVM sees: this is always 49,999,995,000,000 → replaces loop
+}
+
+// FIXED: non-final field in a @State object
+@State(Scope.Benchmark)
+public class MyBenchmark {
+    public int count = 10_000_000;   // NOT static, NOT final
+
+    @Benchmark
+    public long fixed() {
+        long sum = 0;
+        for (int i = 0; i < count; i++) sum += i;
+        return sum;   // real work — JVM must actually run the loop
+    }
+}
+```
+
+**Rule:** Any constant that determines loop bounds or computation input must be a non-final instance field.
+
+---
+
+### Killer 3: Measuring Unwarmed Code
+
+**Symptom:** First few runs are much slower than later runs. Results vary wildly between `@Fork` runs.
+
+```java
+// BROKEN: no warmup → you're measuring the interpreter, not compiled code
+@Warmup(iterations = 0)
+@Measurement(iterations = 1)
+```
+
+```java
+// CORRECT: give the JIT time to compile and stabilize
+@Warmup(iterations = 3, time = 1)    // 3 seconds total of warmup
+@Measurement(iterations = 5, time = 1)  // 5 seconds of real measurement
+```
+
+**How much warmup do you need?** For simple methods: 3 iterations × 1s is usually enough. For complex methods with many
+call paths (e.g., benchmarking a service class): use 5 iterations × 2s.
+
+---
+
+## 6. State — Managing Your Benchmark's Data
+
+`@State` marks a class (or the benchmark class itself) as holding data that JMH manages. This is how you:
+- Prepare data before benchmarking starts (without that preparation counting toward timing)
+- Prevent constant folding (non-final fields)
+- Control whether data is shared between threads or private to each thread
+
+### The Two Scopes You'll Actually Use
+
+#### `Scope.Benchmark` — One instance, shared by all threads
+
+```java
+@State(Scope.Benchmark)
+public class SharedState {
+    public List<Integer> data;          // all benchmark threads read this
+
+    @Setup(Level.Trial)
+    public void setup() {
+        data = IntStream.range(0, 1_000_000)
+                        .boxed()
+                        .collect(Collectors.toList());
+    }
+}
+```
+
+Use this when: your data is **read-only** and you want to avoid setting it up multiple times. Most benchmarks use this.
+
+#### `Scope.Thread` — One instance per thread
+
+```java
+@State(Scope.Thread)
+public class ThreadLocalState {
+    public Random rng;
+
+    @Setup(Level.Iteration)
+    public void setup() {
+        rng = new Random(42);   // each thread gets its own RNG, reset each iteration
+    }
+}
+```
+
+Use this when: each thread needs its own mutable state (counters, random generators, accumulators). If threads shared a
+`Random`, they'd contend on it — you'd be measuring lock contention, not your actual algorithm.
+
+### `@Setup` Levels — When Does Your Prep Code Run?
+
+| Level              | When it runs                                           | Use it for                          |
+|--------------------|--------------------------------------------------------|-------------------------------------|
+| `Level.Trial`      | Once per entire benchmark run (before warmup starts)   | Building large datasets, opening connections |
+| `Level.Iteration`  | Before every warmup and measurement iteration          | Resetting counters, clearing caches |
+| `Level.Invocation` | Before **every single** `@Benchmark` call              | Almost never — the overhead distorts results |
+
+```java
+// Example: reset a counter before every measurement iteration
+// so each iteration starts from the same state
+
+@State(Scope.Thread)
+public class CounterState {
+    public int counter;
+
+    @Setup(Level.Iteration)    // resets before each 1-second measurement window
+    public void reset() {
+        counter = 0;
+    }
+}
+```
+
+### `@Param` — Run the Same Benchmark Across Multiple Inputs
+
+```java
+@State(Scope.Benchmark)
+public class ParamExample {
+
+    @Param({"100", "10000", "1000000"})
+    public int dataSize;            // JMH runs the full suite 3 times, once per value
+
+    public List<Integer> data;
 
     @Setup(Level.Trial)
     public void setup() {
         data = IntStream.range(0, dataSize).boxed().collect(Collectors.toList());
-        customPool = new ForkJoinPool(Runtime.getRuntime().availableProcessors());
-    }
-
-    @TearDown(Level.Trial)
-    public void teardown() {
-        customPool.shutdown();
-    }
-
-    // --- Baseline ---
-
-    @Benchmark
-    public long sequentialSum() {
-        return data.stream().mapToLong(Integer::longValue).sum();
-    }
-
-    @Benchmark
-    public long parallelSum() {
-        return data.parallelStream().mapToLong(Integer::longValue).sum();
-    }
-
-    // --- Custom Pool Isolation ---
-
-    @Benchmark
-    public long customPoolSum() throws Exception {
-        return customPool.submit(
-                () -> data.parallelStream().mapToLong(Integer::longValue).sum()
-        ).get();
-    }
-
-    // --- Collection Bottleneck ---
-
-    @Benchmark
-    public List<Integer> parallelCollect() {
-        return data.parallelStream()
-                .filter(n -> n % 2 == 0)
-                .collect(Collectors.toList());
-    }
-
-    // --- Primitive Range (best-case parallel) ---
-
-    @Benchmark
-    public long primitiveRangeParallel() {
-        return LongStream.range(0, dataSize).parallel().sum();
     }
 }
 ```
 
-### Example 3: Latency Distribution Benchmark
+This is how you find the crossover point where parallel beats sequential — instead of guessing, you measure at multiple
+scales and let the data show you.
+
+---
+
+## 7. Benchmark Modes — What Are You Actually Measuring?
+
+| Mode                  | Reports                              | Use When                                         |
+|-----------------------|--------------------------------------|--------------------------------------------------|
+| `Mode.AverageTime`    | Average time per operation           | "Which of these two is faster?" — most common    |
+| `Mode.Throughput`     | Operations per second                | "How many requests/sec can this handle?"         |
+| `Mode.SampleTime`     | Full distribution: p50, p90, p99...  | "What are my worst-case latencies?"              |
+| `Mode.SingleShotTime` | One cold run, no warmup              | "How slow is this on first call?" (startup cost) |
+
+**For 80% of benchmarks, use `Mode.AverageTime`.**
 
 ```java
+@BenchmarkMode(Mode.AverageTime)
+@OutputTimeUnit(TimeUnit.MICROSECONDS)
+```
 
+**Use `Mode.SampleTime` when tail latency matters** — for anything user-facing, API endpoints, DB queries:
+
+```java
 @BenchmarkMode(Mode.SampleTime)
-@OutputTimeUnit(TimeUnit.NANOSECONDS)
-@State(Scope.Thread)
-@Warmup(iterations = 5, time = 2)
-@Measurement(iterations = 10, time = 2)
-@Fork(3)
-public class CacheLatencyBenchmark {
-
-    private Map<String, String> cache;
-    private String[] keys;
-    private int idx = 0;
-
-    @Setup(Level.Trial)
-    public void setup() {
-        cache = new HashMap<>(10_000);
-        keys = new String[10_000];
-        for (int i = 0; i < 10_000; i++) {
-            keys[i] = "key-" + i;
-            cache.put(keys[i], "value-" + i);
-        }
-    }
-
-    @Benchmark
-    public String cacheHit() {
-        return cache.get(keys[idx++ % keys.length]);  // cyclic, mostly hits
-    }
+@OutputTimeUnit(TimeUnit.MICROSECONDS)
+@Benchmark
+public String cacheLookup() {
+    return cache.get(key);
 }
 ```
 
----
-
-## 12. Reading JMH Output
-
-```
-Benchmark                           (dataSize)  Mode  Cnt    Score    Error  Units
-StreamParallelBenchmark.sequentialSum     1000  avgt    5    0.012 ±  0.001  ms/op
-StreamParallelBenchmark.sequentialSum   100000  avgt    5    0.856 ±  0.012  ms/op
-StreamParallelBenchmark.sequentialSum  1000000  avgt    5    8.432 ±  0.089  ms/op
-StreamParallelBenchmark.parallelSum       1000  avgt    5    0.198 ±  0.008  ms/op  ← slower: overhead > work
-StreamParallelBenchmark.parallelSum     100000  avgt    5    0.412 ±  0.031  ms/op  ← 2× faster
-StreamParallelBenchmark.parallelSum    1000000  avgt    5    1.987 ±  0.144  ms/op  ← 4× faster
-```
-
-**Reading the columns:**
-
-| Column       | Meaning                                                                         |
-|--------------|---------------------------------------------------------------------------------|
-| `(dataSize)` | `@Param` value for this row                                                     |
-| `Mode`       | Benchmark mode (`avgt` = AverageTime)                                           |
-| `Cnt`        | Number of measurement samples                                                   |
-| `Score`      | Primary metric (time per op for `avgt`, ops/sec for `thrpt`)                    |
-| `Error`      | ±2σ confidence interval — if this is large relative to Score, results are noisy |
-| `Units`      | Time unit × operation unit                                                      |
-
-**Interpreting error bars:**
-
-```
-Score: 8.432 ± 0.089 ms/op   ← tight: 1% relative error, trustworthy
-Score: 8.432 ± 4.201 ms/op   ← noisy: 50% relative error, meaningless
-```
-
-If error is > 5% of score: add warmup iterations, increase fork count, check for background JVM activity (JIT
-recompilation, GC pauses).
-
-### Detecting GC Interference
-
-Run with `-prof gc` to add GC stats to the output:
-
-```bash
-java -jar benchmarks.jar -prof gc StreamParallelBenchmark
-```
-
-Output adds columns like:
-
-```
-·gc.alloc.rate           MB/sec   ← allocation rate
-·gc.alloc.rate.norm      B/op     ← bytes allocated per operation
-·gc.count                count    ← GC events during measurement
-·gc.time                 ms       ← total GC pause time
-```
-
-If `gc.time` is significant relative to benchmark `Score`, GC is corrupting your results. Options: increase heap, use
-`EpsilonGC` (no GC), or redesign the benchmark to reduce allocation.
+JMH will report: `p50 = 12µs`, `p90 = 18µs`, `p99 = 340µs`, `p99.9 = 2100µs`.
+A high p99 with a low p50 reveals lock contention or GC pauses that averages hide.
 
 ---
 
-## 13. Quick Decision Guide
-
-### Should I use parallel streams?
+## 8. Reading JMH Output
 
 ```
-Element count < 1,000?          → Sequential
-Per-element work < 100ns?       → Sequential (unless > 100k elements)
-Data source is LinkedList?      → Sequential (O(n) split cost)
-Need to collect to a List?      → Benchmark carefully, merge is serial
-Multiple parallel ops in JVM?   → Use custom ForkJoinPool, not common pool
-Otherwise                       → Benchmark with @Param over size range
+Benchmark                          (dataSize)  Mode  Cnt   Score    Error  Units
+SumBenchmark.sequential                  1000  avgt    5   0.012 ±  0.001  ms/op
+SumBenchmark.sequential                100000  avgt    5   0.856 ±  0.012  ms/op
+SumBenchmark.sequential               1000000  avgt    5   8.432 ±  0.089  ms/op
+SumBenchmark.parallel                    1000  avgt    5   0.198 ±  0.008  ms/op
+SumBenchmark.parallel                  100000  avgt    5   0.412 ±  0.031  ms/op
+SumBenchmark.parallel                 1000000  avgt    5   1.987 ±  0.144  ms/op
 ```
 
-### Which benchmark mode?
+### Column Meanings
+
+| Column       | Meaning                                                                      |
+|--------------|------------------------------------------------------------------------------|
+| `(dataSize)` | The `@Param` value for this row                                               |
+| `Mode`       | Benchmark mode (`avgt` = AverageTime)                                        |
+| `Cnt`        | How many measurement samples were collected                                  |
+| `Score`      | The main result (time per op for `avgt`)                                     |
+| `Error`      | ±2σ confidence interval — how much the results varied across runs            |
+| `Units`      | `ms/op` = milliseconds per operation                                         |
+
+### How to Interpret the Error Column
+
+The `Error` is the ± margin. If Score is `8.432 ± 0.089`, the true value is somewhere in `[8.343, 8.521]`. That's tight
+and trustworthy — about 1% relative error.
 
 ```
-"Which implementation is faster?"         → Mode.AverageTime
-"How many requests/sec can this handle?"  → Mode.Throughput
-"What are the p99/p999 latencies?"        → Mode.SampleTime
-"What's the cold start cost?"             → Mode.SingleShotTime
+Score: 8.432 ± 0.089 ms/op    ← 1% error — trustworthy ✓
+Score: 8.432 ± 4.201 ms/op    ← 50% error — meaningless ✗
 ```
 
-### Is my benchmark trustworthy?
+**If error is more than ~5% of score:**
+- Add more warmup iterations (the JIT may not have fully stabilized)
+- Increase the fork count (`@Fork(3)`)
+- Make sure no other heavy processes are running on your machine
+
+### Reading the Parallel Story in the Example Output
 
 ```
-Error > 5% of Score?           → Add forks/iterations, check background load
-Score suspiciously near 0?     → DCE — return the value or use Blackhole
-Parallel faster than expected? → Constant folding? Check @State on data size
-Results change between runs?   → GC interference — add -prof gc, check heap
-Warmup looks like measurement? → OSR compiled early — increase warmup time
+dataSize=1000:   sequential=0.012ms,  parallel=0.198ms   → parallel is 16× SLOWER
+dataSize=100000: sequential=0.856ms,  parallel=0.412ms   → parallel is 2× faster
+dataSize=1000000:sequential=8.432ms,  parallel=1.987ms   → parallel is 4× faster
+```
+
+This is the crossover point in action. The overhead of splitting work across threads costs ~0.19ms regardless of data
+size. That overhead dominates at 1,000 elements, but becomes negligible at 1,000,000.
+
+---
+
+## 9. Parallel Streams — When to Use Them
+
+### The Core Mental Model
+
+Parallel streams split your data into chunks, process them on multiple CPU cores simultaneously, then combine the
+results. The split + combine steps have a fixed cost. Parallelism only helps when the actual computation cost exceeds
+that fixed overhead.
+
+```
+Sequential: [process all N elements on 1 thread]
+Parallel:   [split] → [process N/4 on thread 1] → [combine]
+                     [process N/4 on thread 2]
+                     [process N/4 on thread 3]
+                     [process N/4 on thread 4]
+```
+
+Parallel wins when: `(work / 4 threads) + overhead < total work`
+Parallel loses when: `overhead > the time saved by splitting`
+
+### Quick Decision Rules
+
+```
+data size < 10,000?              → Use sequential. Overhead exceeds benefit.
+Simple operation (sum, count)?   → Parallel needs ~100,000+ elements to win.
+Complex per-element work?        → Parallel wins at smaller sizes (work dominates).
+Data source is LinkedList?       → Never use parallel (splitting is O(n), kills all benefit).
+Using .collect(toList())?        → Be careful — the merge step is single-threaded (see below).
+Unsure?                          → Use @Param to benchmark both at your actual data sizes.
+```
+
+### The `.collect()` Trap
+
+```java
+// This looks parallel, but the final step — merging all sub-lists into one — is single-threaded.
+// For large lists, the merge can cost more than you saved in filtering.
+return data.parallelStream()
+           .filter(n -> n % 2 == 0)
+           .collect(Collectors.toList());   // ← serial merge bottleneck
+
+// Better alternatives if you don't need a List:
+long count = data.parallelStream().filter(n -> n % 2 == 0).count();         // no merge
+int[] evens = data.parallelStream().filter(n -> n % 2 == 0)
+                  .mapToInt(Integer::intValue).toArray();                    // array merge (fast)
+```
+
+### The Comparison Pitfall
+
+When comparing sequential vs. parallel, use **identical data sources and types**. Otherwise you're measuring something
+other than parallelism.
+
+```java
+// WRONG: sequential uses primitive IntStream, parallel uses boxed List<Integer>
+// You're measuring autoboxing overhead, not parallelism overhead
+@Benchmark
+public long sequential() { return IntStream.range(0, COUNT).sum(); }
+
+@Benchmark
+public long parallel() { return data.parallelStream().mapToLong(Integer::longValue).sum(); }
+
+// CORRECT: same data source, same types — only parallelism differs
+@Benchmark
+public long sequential() { return data.stream().mapToLong(Integer::longValue).sum(); }
+
+@Benchmark
+public long parallel() { return data.parallelStream().mapToLong(Integer::longValue).sum(); }
 ```
 
 ---
 
-## Appendix: Maven / Gradle Setup
+## 10. Common Mistakes Checklist
 
-### Maven
+Before publishing or acting on any benchmark result, verify:
 
-```xml
+**Setup issues:**
 
-<dependency>
-    <groupId>org.openjdk.jmh</groupId>
-    <artifactId>jmh-core</artifactId>
-    <version>1.37</version>
-</dependency>
-<dependency>
-<groupId>org.openjdk.jmh</groupId>
-<artifactId>jmh-generator-annprocess</artifactId>
-<version>1.37</version>
-<scope>provided</scope>
-</dependency>
-```
+- [ ] `@Fork` is at least `2` (not `0` — never run without forking)
+- [ ] `@Warmup` has at least 3 iterations (don't set to `0`)
+- [ ] Heap is locked: `-Xms` equals `-Xmx` in `jvmArgs`
+- [ ] Benchmark is run standalone, not inside a JUnit test (running inside a test poisons the JIT profile)
 
-```xml
+**Dead code / constant folding:**
 
-<plugin>
-    <groupId>org.apache.maven.plugins</groupId>
-    <artifactId>maven-shade-plugin</artifactId>
-    <executions>
-        <execution>
-            <goals>
-                <goal>shade</goal>
-            </goals>
-            <configuration>
-                <finalName>benchmarks</finalName>
-                <transformers>
-                    <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                        <mainClass>org.openjdk.jmh.Main</mainClass>
-                    </transformer>
-                </transformers>
-            </configuration>
-        </execution>
-    </executions>
-</plugin>
-```
+- [ ] Every `@Benchmark` method either returns a value or uses `Blackhole.consume()`
+- [ ] Loop bounds and input sizes are non-final instance fields, not `static final` constants
+- [ ] Data is prepared in `@Setup`, not as a `static final` initialized field
 
-### Gradle (Kotlin DSL)
+**Comparing correctly:**
+
+- [ ] Sequential and parallel benchmarks use the same data type and source
+- [ ] `@Param` is used to test at your actual production data sizes, not arbitrary ones
+- [ ] Mutable state is reset with `@Setup(Level.Iteration)` if it changes across iterations
+
+**Results:**
+
+- [ ] Error (±) is less than 5% of Score
+- [ ] If using parallel streams with `.collect()`, verified the merge bottleneck isn't dominating
+
+---
+
+## 11. Project Setup
+
+### Gradle (Kotlin DSL) — Recommended
 
 ```kotlin
 plugins {
@@ -1115,42 +652,104 @@ dependencies {
 }
 ```
 
-### Running
+Benchmark files go in `src/jmh/java/`. Run with: `./gradlew jmh`
+
+### Maven
+
+```xml
+<dependencies>
+  <dependency>
+    <groupId>org.openjdk.jmh</groupId>
+    <artifactId>jmh-core</artifactId>
+    <version>1.37</version>
+  </dependency>
+  <dependency>
+    <groupId>org.openjdk.jmh</groupId>
+    <artifactId>jmh-generator-annprocess</artifactId>
+    <version>1.37</version>
+    <scope>provided</scope>
+  </dependency>
+</dependencies>
+
+<build>
+  <plugins>
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId>
+      <artifactId>maven-shade-plugin</artifactId>
+      <executions>
+        <execution>
+          <goals><goal>shade</goal></goals>
+          <configuration>
+            <finalName>benchmarks</finalName>
+            <transformers>
+              <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                <mainClass>org.openjdk.jmh.Main</mainClass>
+              </transformer>
+            </transformers>
+          </configuration>
+        </execution>
+      </executions>
+    </plugin>
+  </plugins>
+</build>
+```
+
+Build and run:
 
 ```bash
-# Build fat jar
-mvn clean package -P benchmark
-
-# Run all benchmarks
-java -jar target/benchmarks.jar
-
-# Run specific benchmark
-java -jar target/benchmarks.jar StreamParallelBenchmark
-
-# With profiler
-java -jar target/benchmarks.jar -prof gc StreamParallelBenchmark
-
-# Quick smoke-test (1 fork, 1 warmup, 1 measurement)
-java -jar target/benchmarks.jar -f 1 -wi 1 -i 1
+mvn clean package
+java -jar target/benchmarks.jar                      # run all
+java -jar target/benchmarks.jar SumBenchmark         # run one class
+java -jar target/benchmarks.jar -f 1 -wi 1 -i 1      # quick smoke test
 ```
 
 ---
 
-## Appendix: JVM Flags Reference
+## Appendix: Minimal Correct Template
 
-| Flag                                                | Effect                                                                      |
-|-----------------------------------------------------|-----------------------------------------------------------------------------|
-| `-Xms4G -Xmx4G`                                     | Lock heap at 4GB — prevents GC-threshold drift                              |
-| `-XX:+UseG1GC`                                      | Enable G1 garbage collector                                                 |
-| `-XX:+UseZGC`                                       | Enable ZGC (low-latency, good for allocation-heavy benchmarks)              |
-| `-XX:+UseEpsilonGC`                                 | No-op GC — OOM on first GC trigger, use only for allocation-free benchmarks |
-| `-XX:+PrintCompilation`                             | Log JIT compilation events to stdout                                        |
-| `-XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining` | Log inlining decisions                                                      |
-| `-XX:-TieredCompilation`                            | Force C2 directly — removes C1 warmup tier, longer warmup needed            |
-| `-XX:CompileThreshold=1000`                         | Lower invocation threshold for faster C2 entry (dev only)                   |
-| `-Xlog:gc*:file=gc.log`                             | Write full GC log to file                                                   |
+Copy this for every new benchmark. Fill in your logic. Every line has a reason.
+
+```java
+package com.example.benchmarks;
+
+import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.infra.Blackhole;
+import java.util.concurrent.TimeUnit;
+
+@BenchmarkMode(Mode.AverageTime)           // measure average time per call
+@OutputTimeUnit(TimeUnit.MICROSECONDS)     // report in microseconds
+@State(Scope.Benchmark)                    // this class holds benchmark data
+@Warmup(iterations = 3, time = 1)          // 3 seconds of warmup before timing
+@Measurement(iterations = 5, time = 1)    // 5 seconds of actual measurement
+@Fork(value = 2, jvmArgs = {"-Xms512m", "-Xmx512m"})  // 2 fresh JVMs, fixed heap
+public class TemplateBenchmark {
+
+    // Non-final field prevents constant folding
+    public int inputSize = 100_000;
+
+    // Prepare expensive data here — this doesn't count toward timing
+    @Setup(Level.Trial)
+    public void setup() {
+        // e.g., build your list, open a connection, etc.
+    }
+
+    @Benchmark
+    public long benchmarkA() {
+        long result = 0;
+        // your code here
+        return result;   // always return or consume with Blackhole
+    }
+
+    @Benchmark
+    public long benchmarkB() {
+        long result = 0;
+        // competing implementation here
+        return result;
+    }
+}
+```
 
 ---
 
-*Reference compiled from JMH documentation, JVM internals, and Modern Java in Action. Covers the 80% of JMH you'll use
-in 95% of production benchmarking work.*
+*This guide covers the 20% of JMH that handles 80% of real benchmarking work. For advanced topics (profilers, async
+profiling, hardware counters), see the official JMH samples at openjdk.org/projects/code-tools/jmh.*
