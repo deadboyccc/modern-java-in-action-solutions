@@ -16,6 +16,10 @@ public class SystemProperties {
         props.setProperty("a", "5");
         props.setProperty("b", "true");
         props.setProperty("c", "-3");
+        SystemProperties prop = new SystemProperties(props);
+        var a =
+                prop.readDuration("a");
+        System.out.println(a);
     }
 
     public static Optional<Integer> stringToInt(String s) {
