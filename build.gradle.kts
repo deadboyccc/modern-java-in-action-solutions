@@ -21,6 +21,8 @@ repositories {
 dependencies {
     // JMH — 1.37 is still the latest stable release
     implementation("org.openjdk.jmh:jmh-core:1.37")
+    implementation(project(":"))
+    implementation(project(":"))
     annotationProcessor("org.openjdk.jmh:jmh-generator-annprocess:1.37")
 
     // JUnit — pick ONE of the two lines below:
