@@ -21,6 +21,10 @@
             <artifactId>commons-codec</artifactId>
             <version>1.22.0</version>
         </dependency>
+        <dependency>
+            <groupId></groupId>
+            <artifactId></artifactId>
+        </dependency>
     </dependencies>
 
 </project>

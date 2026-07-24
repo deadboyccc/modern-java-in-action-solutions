@@ -1,7 +1,6 @@
 plugins {
     java
-    // Shadow has moved to GradleUp org — new plugin ID, new version
-    id("com.gradleup.shadow") version "9.4.1"
+    id("com.gradleup.shadow") version "9.5.1"
     kotlin("jvm")
 }
 
@@ -19,26 +18,26 @@ repositories {
 }
 
 dependencies {
-    // JMH — 1.37 is still the latest stable release
+    // JMH Dependencies
     implementation("org.openjdk.jmh:jmh-core:1.37")
-    implementation(project(":"))
-    implementation(project(":"))
     annotationProcessor("org.openjdk.jmh:jmh-generator-annprocess:1.37")
 
-    // JUnit — pick ONE of the two lines below:
-    // Option A: JUnit 5 stable (conservative, widest ecosystem support)
-//    testImplementation(platform("org.junit:junit-bom:5.14.4"))
-    // Option B: JUnit 6 GA (new, requires Java 17+, breaking API changes from 5.x)
-    testImplementation(platform("org.junit:junit-bom:6.1.0"))
-
+    // JUnit 6 BOM (requires Java 17+)
+    testImplementation(platform("org.junit:junit-bom:6.1.1"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    // Kotlin Stdlib
     implementation(kotlin("stdlib-jdk8"))
 }
-// build.gradle.kts (Kotlin DSL)
+
 tasks.test {
     useJUnitPlatform()
+    testLogging {
+        events("passed", "skipped", "failed")
+    }
 }
+
 tasks.shadowJar {
     archiveBaseName = "benchmarks"
     archiveClassifier = ""
@@ -51,16 +50,10 @@ tasks.shadowJar {
 }
 
 tasks.jar {
+    // Disabled in favor of shadowJar fat-jar generation
     enabled = false
 }
 
 artifacts {
     add("archives", tasks.shadowJar)
-}
-
-tasks.test {
-    useJUnitPlatform()
-    testLogging {
-        events("passed", "skipped", "failed")
-    }
 }
