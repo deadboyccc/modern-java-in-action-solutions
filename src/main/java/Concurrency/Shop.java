@@ -28,6 +28,15 @@ public class Shop {
         return calculatePrice(product);
     }
 
+    public double getDiscount(String product) {
+        return calculateDiscount(product);
+    }
+
+    private double calculateDiscount(String product) {
+        delay();
+        return Math.min(new Random().nextDouble() + product.charAt(0), new Random().nextDouble());
+    }
+
     private double calculatePrice(String product) {
         delay();
         return new Random().nextDouble() * product.charAt(0) + product.charAt(1);
