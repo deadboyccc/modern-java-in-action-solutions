@@ -2,12 +2,14 @@ package Concurrency;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
@@ -32,6 +34,8 @@ public class CompletableFutureExamples {
         runBenchmark("2. Async CompletableFuture", () -> findPricesAsync("iPhone 15"));
         runBenchmark("3. Async Composition (thenCompose)", () -> findDiscountedPricesAsync("iPhone 15"));
         runBenchmark("4. Async Combination (thenCombine)", () -> findPricesAndCombineAsync("iPhone 15"));
+        runBenchmark("5. Print as soon (thenAccept)", () -> printAsSoon("iPhone 15"));
+        runBenchmark("6. Get First Result (anyOf)", () -> getFirst("iPhone 15"));
 
         // Shutdown executor after all tasks finish
         executor.shutdown();
@@ -99,39 +103,77 @@ public class CompletableFutureExamples {
     }
 
     // =========================================================================
-    // 4. Independent Async Combination (thenCombine)
+    // 4. Independent Async Combination & Timeouts (thenCombine / orTimeout)
     // =========================================================================
 
     /**
-     * Demonstrates running two independent async operations in parallel and combining results.
-     * Use 'thenCombine' when Task A and Task B can run simultaneously without waiting on each other.
+     * Demonstrates running two independent async operations in parallel and combining results,
+     * along with handling timeouts.
      */
     public static List<String> findPricesAndCombineAsync(String product) {
         List<CompletableFuture<String>> priceFutures = shops.stream()
                 .map(shop -> {
-                    // Task A: Fetch initial formatted price
                     CompletableFuture<String> formattedPriceFuture = CompletableFuture.supplyAsync(
                             () -> String.format(Locale.US, "%s price is ", shop.getName()),
                             executor
                     );
 
-                    // Task B: Fetch raw price independently
                     CompletableFuture<Double> rawPriceFuture = CompletableFuture.supplyAsync(
                             () -> shop.getPrice(product),
                             executor
                     );
 
-                    // Combine results when BOTH futures complete
                     return formattedPriceFuture.thenCombine(
-                            rawPriceFuture,
-                            (formatted, raw) -> formatted + String.format(Locale.US, "%.2f", raw)
-                    );
+                                    rawPriceFuture,
+                                    (formatted, raw) -> formatted + String.format(Locale.US, "%.2f", raw)
+                            )
+                            .orTimeout(30, TimeUnit.SECONDS)
+                            .completeOnTimeout("Default price (Timed out)", 100, TimeUnit.SECONDS);
                 })
                 .toList();
 
         return priceFutures.stream()
                 .map(CompletableFuture::join)
                 .toList();
+    }
+
+    // =========================================================================
+    // 5. Reactive Side-Effects (thenAccept + allOf)
+    // =========================================================================
+
+    /**
+     * Triggers a callback immediately as soon as EACH individual future completes,
+     * while blocking until ALL tasks finish processing.
+     */
+    public static List<String> printAsSoon(String product) {
+        CompletableFuture<?>[] futures = shops.stream()
+                .map(shop -> CompletableFuture.supplyAsync(
+                        () -> String.format(Locale.US, "%s price is %.2f", shop.getName(), shop.getPrice(product)),
+                        executor
+                ).thenAccept(System.out::println))
+                .toArray(CompletableFuture[]::new);
+
+        CompletableFuture.allOf(futures).join();
+        return Collections.emptyList();
+    }
+
+    // =========================================================================
+    // 6. First-Result Wins (anyOf)
+    // =========================================================================
+
+    /**
+     * Returns as soon as the FASTEST shop completes its query.
+     */
+    public static List<String> getFirst(String product) {
+        CompletableFuture<?>[] futures = shops.stream()
+                .map(shop -> CompletableFuture.supplyAsync(
+                        () -> String.format(Locale.US, "%s price is %.2f", shop.getName(), shop.getPrice(product)),
+                        executor
+                ))
+                .toArray(CompletableFuture[]::new);
+
+        Object fastestResult = CompletableFuture.anyOf(futures).join();
+        return List.of((String) fastestResult);
     }
 
     // =========================================================================
@@ -143,6 +185,6 @@ public class CompletableFutureExamples {
         List<String> prices = priceTask.get();
         long durationMs = Duration.between(start, Instant.now()).toMillis();
 
-        System.out.printf("%-35s | Fetched: %3d items | Time: %4d ms%n", label, prices.size(), durationMs);
+        System.out.printf("%-40s | Fetched: %3d items | Time: %4d ms%n", label, prices.size(), durationMs);
     }
 }

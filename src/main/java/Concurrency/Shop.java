@@ -14,7 +14,7 @@ public class Shop {
 
     public static void delay() {
         try {
-            Thread.sleep(1000L);
+            Thread.sleep(500 + new Random().nextInt(2500));
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
