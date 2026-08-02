@@ -6,8 +6,6 @@ import java.time.Duration;
 
 public class ProjectReactorFluxDemos {
     public static void main() throws InterruptedException {
-//        Flux.just("hello", "world").subscribe(System.out::println);
-//        Thread.sleep(2000);
         Flux<Long> interval = Flux.interval(Duration.ofSeconds(2));
         interval.subscribe(System.out::println);
         Thread.sleep(10000);
