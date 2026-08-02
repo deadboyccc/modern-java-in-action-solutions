@@ -19,6 +19,8 @@ repositories {
 }
 
 dependencies {
+    // project Reactor
+    implementation("io.projectreactor:reactor-core:3.6.9")
     // kotlinx.coroutines — .await() on CompletableFuture ships in core since 1.7.0,
     // no separate kotlinx-coroutines-jdk8 dependency needed
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.8.1")
@@ -63,4 +65,17 @@ tasks.jar {
 
 artifacts {
     add("archives", tasks.shadowJar)
+}
+// Disable target validation mismatch check between Java (25) and Kotlin (24 fallback)
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    compilerOptions {
+        jvmTargetValidationMode.set(org.jetbrains.kotlin.gradle.dsl.jvm.JvmTargetValidationMode.IGNORE)
+    }
+}
+
+// Ensure Kapt also ignores the target mismatch
+tasks.withType<org.jetbrains.kotlin.gradle.internal.KaptGenerateStubsTask>().configureEach {
+    compilerOptions {
+        jvmTargetValidationMode.set(org.jetbrains.kotlin.gradle.dsl.jvm.JvmTargetValidationMode.IGNORE)
+    }
 }
