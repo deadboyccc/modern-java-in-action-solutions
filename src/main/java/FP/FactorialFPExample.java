@@ -26,4 +26,17 @@ public class FactorialFPExample {
     static long factorialHelper(long acc, long n) {
         return n == 1 ? acc : factorialHelper(acc * n, n - 1);
     }
+
+    static void main() {
+        long n = 5;
+        // not precise but gives a rough idea of the time taken for each method
+        var now = System.currentTimeMillis();
+
+        System.out.println("Factorial of " + n + " (iterative): " + factorialIterative(n));
+        System.out.println("Factorial of " + n + " (recursive): " + factorialRecursive(n));
+        System.out.println("Factorial of " + n + " (streams): " + factorialStreams(n));
+        System.out.println("Factorial of " + n + " (tail recursive): " + factorialTailRecursive(n));
+        System.out.println("Time taken: " + (System.currentTimeMillis() - now) + " ms");
+    }
+
 }
