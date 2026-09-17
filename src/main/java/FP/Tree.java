@@ -6,6 +6,10 @@ public class Tree {
     public final int val;
     public final Tree left;
     public final Tree right;
+    //   ()
+    //  /   \
+    // ()   ()
+
 
     public Tree(String k, int v, Tree l, Tree r) {
         this.key = k;
@@ -19,8 +23,13 @@ class TreeProcessor {
 
     // --- Lookup ---
     public static int lookup(String k, int defaultval, Tree t) {
+        // if the tree is empty, return the default value
         if (t == null) return defaultval;
+
+        // if the key matches the current node's key, return its value
         if (k.equals(t.key)) return t.val;
+
+        // otherwise, traverse left or right based on key comparison
         return lookup(k, defaultval, k.compareTo(t.key) < 0 ? t.left : t.right);
     }
 
@@ -43,10 +52,14 @@ class TreeProcessor {
     // --- Functional / Persistent Update ---
     // Creates new nodes along the path to the root while sharing unchanged subtrees.
     public static Tree fupdate(String k, int newval, Tree t) {
+        // if the tree is empty, create a new node with the key and value
         return (t == null) ?
                 new Tree(k, newval, null, null) :
+                // if the key matches the current node's key, create a new node with the updated value
                 k.equals(t.key) ?
                         new Tree(k, newval, t.left, t.right) :
+
+                        // otherwise, create a new node with the same key and value, but update the left or right subtree
                         k.compareTo(t.key) < 0 ?
                                 new Tree(t.key, t.val, fupdate(k, newval, t.left), t.right) :
                                 new Tree(t.key, t.val, t.left, fupdate(k, newval, t.right));
