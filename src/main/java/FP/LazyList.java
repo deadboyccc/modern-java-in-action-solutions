@@ -35,6 +35,10 @@ class LazyList<T> implements MyList<T> {
     public T next() {
         return tail.get().head();
     }
+//    public List<T> toList() {
+//        return List.of(head, (LazyList<T>) tail.get()).stream().flatMap(x -> x.toList().stream()).collect(java.util.stream.Collectors.toList());
+//
+//    }
 
     public boolean isEmpty() {
         return false;
