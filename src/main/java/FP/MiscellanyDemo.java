@@ -29,7 +29,7 @@ public class MiscellanyDemo {
     // =========================================================================
 
     // Kept standard public void main(String[] args) so it runs natively without Preview feature flags
-    public static void main(String[] args) {
+    static void main() {
         System.out.println("=== 1. MEMOIZATION / CACHING DEMO ===");
         MemoizationExample memo = new MemoizationExample();
         Range r1 = new Range(1, 10);

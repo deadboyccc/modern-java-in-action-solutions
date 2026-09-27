@@ -1,5 +1,7 @@
 package FP;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -124,7 +126,7 @@ public class PatternMatchingDemo {
         }
 
         @Override
-        public String toString() {
+        public @NotNull String toString() {
             return String.valueOf(val);
         }
     }
@@ -136,7 +138,7 @@ public class PatternMatchingDemo {
         }
 
         @Override
-        public String toString() {
+        public @NotNull String toString() {
             return "(" + left + " " + opname + " " + right + ")";
         }
     }
