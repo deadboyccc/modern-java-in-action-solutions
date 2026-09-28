@@ -94,7 +94,7 @@ public class PatternMatchingDemo {
         };
 
         // Case: number, already simple; rebuild as-is.
-        Function<Integer, Expr> numCase = val -> new NumberNode(val);
+        Function<Integer, Expr> numCase = NumberNode::new;
 
         // Case: unknown Expr subtype. Unreachable today (only BinOp and NumberNode
         // exist) but required by the helper's signature; falls back to 0.

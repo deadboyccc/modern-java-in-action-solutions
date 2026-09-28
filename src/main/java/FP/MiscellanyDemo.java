@@ -65,7 +65,7 @@ public class MiscellanyDemo {
 
         Tree initialTree = new Tree("Root", 10, null, null);
 
-        // Same input, same function -> two separate but structurally identical trees.
+        // Same input, same function -> two separate references but structurally identical trees.
         // The original tree is never modified (persistent data structure).
         Tree t2 = Tree.fUpdate("Will", 26, initialTree);
         Tree t3 = Tree.fUpdate("Will", 26, initialTree);
@@ -79,11 +79,15 @@ public class MiscellanyDemo {
     private static void demoCombinators() {
         System.out.println("\n=== 3. FUNCTIONAL COMBINATORS DEMO ===");
 
+        // A simple function that doubles its input.
         Function<Integer, Integer> doubleValue = x -> 2 * x;
 
         // Apply doubleValue three times: 10 -> 20 -> 40 -> 80
+        // repeat(3, doubleValue) returns a new function that applies doubleValue three times.
         Function<Integer, Integer> octupleValue = repeat(3, doubleValue);
 
+        // Show the result of applying the composed function to 10.
+        // Expected output: 80
         System.out.println("repeat(3, x -> 2*x).apply(10) = " + octupleValue.apply(10));
     }
 
