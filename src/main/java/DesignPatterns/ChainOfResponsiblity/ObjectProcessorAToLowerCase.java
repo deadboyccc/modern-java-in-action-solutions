@@ -1,11 +1,15 @@
 package DesignPatterns.ChainOfResponsiblity;
 
+import java.util.Locale;
 
+/**
+ * Concrete handler: normalizes text before later handlers receive it.
+ */
 public class ObjectProcessorAToLowerCase extends ProcessingObject<String> {
     @Override
     protected String handleWork(String input) {
-        var res = input.toLowerCase();
-        System.out.println("In processor : " + res);
-        return res;
+        String result = input.toLowerCase(Locale.ROOT);
+        System.out.println("Lowercase handler: " + result);
+        return result;
     }
 }
