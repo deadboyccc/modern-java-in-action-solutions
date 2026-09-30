@@ -3,7 +3,7 @@ package DesignPatterns.Interpreter;
 import java.util.Objects;
 
 /**
- * Nonterminal expression: AND combines two smaller expressions into one rule.
+ * Non-terminal expression: AND combines two smaller expressions into one rule.
  */
 public class AndExpression implements Expression {
     private final Expression left;

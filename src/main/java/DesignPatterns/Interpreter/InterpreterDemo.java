@@ -4,7 +4,7 @@ package DesignPatterns.Interpreter;
  * Client: builds a grammar tree, then interprets it using the current context.
  */
 public class InterpreterDemo {
-    public static void main(String[] args) {
+    static void main(String[] args) {
         Context sensors = new Context();
         sensors.assign("temperatureHigh", true);
         sensors.assign("windowOpen", false);
@@ -17,6 +17,7 @@ public class InterpreterDemo {
                         new VariableExpression("windowOpen")),
                 new VariableExpression("smokeDetected"));
 
+        // should be false because windowOpen is false and smokeDetected is false
         System.out.println("Should the alarm sound? " + rule.interpret(sensors));
     }
 }

@@ -1,5 +1,7 @@
 package DesignPatterns.Memento;
 
+import DesignPatterns.Memento.Editor.Memento;
+
 import java.util.ArrayDeque;
 import java.util.Deque;
 
@@ -7,7 +9,7 @@ import java.util.Deque;
  * Caretaker: stores snapshots without inspecting or changing their contents.
  */
 public class History {
-    private final Deque<Editor.Memento> snapshots = new ArrayDeque<>();
+    private final Deque<Memento> snapshots = new ArrayDeque<>();
 
     public void save(Editor editor) {
         snapshots.push(editor.save());

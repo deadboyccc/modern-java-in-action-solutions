@@ -2,6 +2,8 @@ package DesignPatterns.Memento;
 
 /**
  * Originator: owns editable state and creates/restores its snapshots.
+ * editable state = text and cursor position
+ * snapshots = Memento objects that store the text and cursor position
  */
 public class Editor {
     private String text = "";

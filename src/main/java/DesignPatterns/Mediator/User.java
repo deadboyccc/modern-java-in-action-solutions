@@ -12,6 +12,8 @@ public class User {
     public User(String name, Mediator mediator) {
         this.name = Objects.requireNonNull(name, "name");
         this.mediator = Objects.requireNonNull(mediator, "mediator");
+
+        // register this user with the mediator upon creation
         mediator.register(this);
     }
 
