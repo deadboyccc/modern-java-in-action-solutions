@@ -4,7 +4,7 @@ package DesignPatterns.Prototype;
  * Client: start from configured prototypes instead of repeating setup.
  */
 public class PrototypeDemo {
-    public static void main(String[] args) {
+    static void main(String[] args) {
         Circle circlePrototype = new Circle("blue", 10);
         Circle circleCopy = circlePrototype.copy();
         circleCopy.setRadius(3);
@@ -14,6 +14,8 @@ public class PrototypeDemo {
 
         System.out.println("Prototype: " + circlePrototype);
         System.out.println("Copy:      " + circleCopy);
+
+        System.out.println("Prototype: " + rectanglePrototype);
         System.out.println("Rectangle copy: " + rectangleCopy);
     }
 }
