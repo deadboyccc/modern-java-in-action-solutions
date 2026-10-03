@@ -12,6 +12,7 @@ java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(25)
     }
+
 }
 
 repositories {
@@ -77,5 +78,18 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 tasks.withType<org.jetbrains.kotlin.gradle.internal.KaptGenerateStubsTask>().configureEach {
     compilerOptions {
         jvmTargetValidationMode.set(org.jetbrains.kotlin.gradle.dsl.jvm.JvmTargetValidationMode.IGNORE)
+    }
+}
+
+// Pass -parameters to Java sources
+tasks.withType<JavaCompile>().configureEach {
+    options.compilerArgs.add("-parameters")
+}
+
+// Pass -java-parameters to Kotlin sources
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    compilerOptions {
+        jvmTargetValidationMode.set(org.jetbrains.kotlin.gradle.dsl.jvm.JvmTargetValidationMode.IGNORE)
+        freeCompilerArgs.add("-java-parameters")
     }
 }
